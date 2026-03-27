@@ -1,9 +1,8 @@
-[gd_scene format=3 uid="uid://ywp80xp7wr76"]
+[gd_scene format=3 uid="uid://bppwkmyi1tuoe"]
 
-[ext_resource type="PackedScene" uid="uid://by8pqr474iaqj" path="res://scenes/duckie_bot.tscn" id="1_nhwvo"]
-[ext_resource type="Texture2D" uid="uid://ctpxnl5i08jgn" path="res://textures/leafy_grass_diff_4k.png" id="2_rax0i"]
-[ext_resource type="Texture2D" uid="uid://dmarl4bfd7bia" path="res://textures/leafy_grass_nor_gl_4k.png" id="3_04hpf"]
-[ext_resource type="PackedScene" uid="uid://b1lggcp0myfk2" path="res://models/lane_follower.glb" id="4_rax0i"]
+[ext_resource type="PackedScene" uid="uid://by8pqr474iaqj" path="res://scenes/duckie_bot.tscn" id="1_hwjrd"]
+[ext_resource type="Texture2D" uid="uid://ctpxnl5i08jgn" path="res://textures/leafy_grass_diff_4k.png" id="2_igorj"]
+[ext_resource type="Texture2D" uid="uid://dmarl4bfd7bia" path="res://textures/leafy_grass_nor_gl_4k.png" id="3_i0fxh"]
 
 [sub_resource type="WorldBoundaryShape3D" id="WorldBoundaryShape3D_lqe0e"]
 
@@ -21,16 +20,16 @@ sky = SubResource("Sky_h75p3")
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_g70oi"]
 albedo_color = Color(0.14695662, 0.23146757, 0.031017188, 1)
-albedo_texture = ExtResource("2_rax0i")
+albedo_texture = ExtResource("2_igorj")
 normal_enabled = true
-normal_texture = ExtResource("3_04hpf")
+normal_texture = ExtResource("3_i0fxh")
 uv1_scale = Vector3(60, 60, 60)
 
 [sub_resource type="PlaneMesh" id="PlaneMesh_v2526"]
 
 [node name="Project" type="Node3D" unique_id=347687036]
 
-[node name="DuckieBot" parent="." unique_id=2139984255 instance=ExtResource("1_nhwvo")]
+[node name="DuckieBot" parent="." unique_id=2139984255 instance=ExtResource("1_hwjrd")]
 transform = Transform3D(0.04452619, 0, -0.99900824, 0, 1, 0, 0.99900824, 0, 0.04452619, 4.3686967, 0.044506483, 5.3433104)
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=447023157]
@@ -55,6 +54,3 @@ transform = Transform3D(1, 0, 0, 0, -0.006562349, 0.9999785, 0, -0.9999785, -0.0
 transform = Transform3D(10.057154, 0, 0, 0, 10.057154, 0, 0, 0, 10.057154, 4.5697584, 0.00669533, -0.9157721)
 material_override = SubResource("StandardMaterial3D_g70oi")
 mesh = SubResource("PlaneMesh_v2526")
-
-[node name="lanefollower" parent="." unique_id=1136103115 instance=ExtResource("4_rax0i")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 6.1735616, 0.014968276, 5.171497)

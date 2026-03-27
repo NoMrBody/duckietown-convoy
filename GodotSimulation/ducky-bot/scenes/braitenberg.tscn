@@ -33,6 +33,7 @@ sky = SubResource("Sky_h75p3")
 
 [node name="DuckieBot" parent="." unique_id=421479594 instance=ExtResource("1_udk7q")]
 transform = Transform3D(0.06310387, 0, 0.9980069, 0, 1, 0, -0.9980069, 0, 0.06310387, 6.410718, 0.05499634, -0.47879133)
+RotateOnStart = true
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=359932321]
 transform = Transform3D(1, 0, 0, 0, 0.0074698986, 0.9999721, 0, -0.9999721, 0.0074698986, -1.0819607, 10.15756, 0)

@@ -2,10 +2,11 @@ extends CharacterBody3D
 
 @export var wheel_radius: float = 0.0318   # meters
 @export var baseline: float = 0.10         # meters
-@export var max_speed: float = 1.0         # m/s (tune if needed)
+@export var max_speed: float = 1.0         # m/s (simulation speed — 5× faster than a real Duckiebot)
 @export var max_turn_rate: float = 8.0   # Max radians/sec (match omega_max from calibration)
 @export var WheelPort = 5002
 @export var CameraPort = 5001
+@export var  RotateOnStart = false
 
 var port_file_path: String = ""
 var gravity: float = 9.8
@@ -40,7 +41,8 @@ func _ready() -> void:
 	if _minimum_player:
 		_minimum_player.pitch_scale = _current_pitch
 
-	rotation.y = randf_range(0.0, TAU)
+	if RotateOnStart:
+		rotation.y = randf_range(0.0, TAU)
 
 	initial_position = global_position
 	initial_rotation = rotation
@@ -134,7 +136,10 @@ func get_game_state() -> Dictionary:
 
 func reset_game() -> void:
 	global_position = initial_position
-	rotation = Vector3(initial_rotation.x, randf_range(0.0, TAU), initial_rotation.z)
+	if RotateOnStart:
+		rotation = Vector3(initial_rotation.x, randf_range(0.0, TAU), initial_rotation.z)
+	else:
+		rotation = Vector3(initial_rotation)
 	velocity = Vector3.ZERO
 
 	game_over = false
@@ -144,4 +149,4 @@ func reset_game() -> void:
 	start_time = Time.get_unix_time_from_system()
 	total_distance = 0.0
 
-	print("[Robot] Game reset! rotation.y=", rad_to_deg(rotation.y))
+	#print("[Robot] Game reset! rotation.y=", rad_to_deg(rotation.y))

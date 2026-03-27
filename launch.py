@@ -179,7 +179,7 @@ def launch_godot(godot_path=None, debug=False, camera_port=None, wheel_port_hint
     imported_dir = os.path.join(GODOT_PROJECT, '.godot', 'imported')
     needs_import = not (os.path.isdir(imported_dir) and
                         any(f.endswith(('.scn', '.res', '.mesh')) for f in os.listdir(imported_dir)))
-    if needs_import:
+    if True:
         print("⏳ Importing Godot project assets (first run only)...")
         try:
             subprocess.run([godot_path, '--path', GODOT_PROJECT, '--import', '--headless'],

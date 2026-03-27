@@ -4,12 +4,12 @@ importer="scene"
 importer_version=1
 type="PackedScene"
 uid="uid://b1lggcp0myfk2"
-path="res://.godot/imported/lanefollower.glb-cb188a585ef336fd458c79b37458f3bc.scn"
+path="res://.godot/imported/lane_follower.glb-5fb3d456ef918a1757f75772be4ec8e9.scn"
 
 [deps]
 
-source_file="res://models/lanefollower.glb"
-dest_files=["res://.godot/imported/lanefollower.glb-cb188a585ef336fd458c79b37458f3bc.scn"]
+source_file="res://models/lane_follower.glb"
+dest_files=["res://.godot/imported/lane_follower.glb-5fb3d456ef918a1757f75772be4ec8e9.scn"]
 
 [params]
 

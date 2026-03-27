@@ -15,7 +15,7 @@ GODOT_SCENES = {
     'braitenberg': 'res://scenes/braitenberg.tscn',
     'visual_lane_servoing': 'res://scenes/lane_follower.tscn',
     'introduction': 'res://scenes/introduction.tscn',
-    'modcon': 'res://scenes/lane_follower.tscn',
+    'modcon': 'res://scenes/Modconpath.tscn',
 }
 
 DEFAULT_WEB_PORT = 5000
