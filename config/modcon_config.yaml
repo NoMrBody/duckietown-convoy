@@ -1,18 +1,14 @@
-baseline: 0.1        # Distance between wheels (meters)
-radius: 0.0318       # Wheel radius (meters)
-k: 27.0              # Motor constant
-gain: 0.5            # Motor gain calibration
-trim: 0              # Motor trim calibration
-power_limit: 0.85    # PWM power limit
-v_max: 1.0           # Max linear velocity (m/s)
-omega_max: 8.0       # Physical max angular velocity (rad/s)
-
-# --- PID controller gains ---
-k_P: 1.5             # Proportional — reacts to current heading error
-k_I: 0.1             # Integral     — corrects steady-state drift
-k_D: 0.2             # Derivative   — dampens oscillations
-max_omega: 3.0       # PID output saturation (rad/s)
-
-# --- ModCon maneuver parameters ---
-v_0: 0.3             # Default forward speed (m/s) used in maneuvers
-k_heading: 0.5       # PWM correction per radian during straight driving
+baseline: 0.1
+radius: 0.0318
+k: 27.0
+gain: 0.5
+trim: 0
+power_limit: 0.85
+v_max: 1.0
+omega_max: 8.0
+k_P: 0.0
+k_I: 0.0
+k_D: 0.0
+max_omega: 3.0
+v_0: 0.3
+k_heading: 0.5
