@@ -38,7 +38,7 @@ def pose_estimation(
     d_right = R * delta_phi_right
 
     # Distance and rotation of robot center
-    d_A         = (d_left + d_right) / 2
+    d_A         = (d_left + d_right) / 2.0
     Delta_Theta = (d_right - d_left) / baseline
 
     # Update pose
