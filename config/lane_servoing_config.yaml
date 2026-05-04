@@ -1,3 +1,5 @@
-const: 0.03
-gain: 0.2
-detection_threshold: 50
+base_speed: 0.13
+curve_speed: 0
+d_gain: 0.0
+detection_threshold: 100
+p_gain: 0.0

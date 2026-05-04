@@ -10,6 +10,7 @@ extends CharacterBody3D
 
 var port_file_path: String = ""
 var gravity: float = 9.8
+var _current_omega: float = 0.0
 
 @onready var wheel_server = get_node("WheelServer")
 
@@ -64,13 +65,11 @@ func _physics_process(delta: float) -> void:
 	var v_right: float = right * max_speed
 
 	var v: float = (v_right + v_left) * 0.5
+
 	var omega: float = (v_right - v_left) / baseline
-
-	var turn_amount = omega * delta
-	if abs(turn_amount) > max_turn_rate * delta:
-		turn_amount = sign(turn_amount) * max_turn_rate * delta
-
-	rotate_y(turn_amount)
+	omega = clamp(omega, -max_turn_rate, max_turn_rate)
+	_current_omega = lerp(_current_omega, omega, delta * 2.0)
+	rotate_y(_current_omega * delta)
 
 	if is_on_floor():
 		velocity.y = 0.0
@@ -143,10 +142,9 @@ func reset_game() -> void:
 	velocity = Vector3.ZERO
 
 	game_over = false
+	_current_omega = 0
 	collision_duck_name = ""
 	start_position = initial_position
 	last_position = initial_position
 	start_time = Time.get_unix_time_from_system()
 	total_distance = 0.0
-
-	#print("[Robot] Game reset! rotation.y=", rad_to_deg(rotation.y))
