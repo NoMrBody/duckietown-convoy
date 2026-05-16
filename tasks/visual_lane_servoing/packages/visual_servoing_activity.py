@@ -18,10 +18,40 @@ _white_lower = np.array([_h.get('white_lower_h', 0),   _h.get('white_lower_s', 0
 _white_upper = np.array([_h.get('white_upper_h', 0), _h.get('white_upper_s', 0), _h.get('white_upper_v', 0)])
 
 def detect_lane_markings(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    raise NotImplementedError("TODO: Implement this function")
+    """
+    Detects the left (dashed-yellow) and right (solid-white) lane markings.
 
+    Args:
+        image: BGR image from the Duckiebot's camera (H x W x 3, uint8)
 
+    Returns:
+        mask_left:  binary mask of the left (yellow) lane marking
+        mask_right: binary mask of the right (white) lane marking
+    """
+    h, w = image.shape[:2]
 
+    # --- Convert to HSV ---
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+
+    # --- Horizon mask: ignore top third (sky / far background) ---
+    mask_ground = np.zeros((h, w), dtype=np.uint8)
+    mask_ground[h // 3:, :] = 1
+
+    # --- Left / right half masks ---
+    mask_left_half = np.zeros((h, w), dtype=np.uint8)
+    mask_right_half = np.zeros((h, w), dtype=np.uint8)
+    mask_left_half[:, :w // 2] = 1
+    mask_right_half[:, w // 2:] = 1
+
+    # --- Color masks (normalize to 0/1 — inRange returns 0/255) ---
+    mask_yellow = (cv2.inRange(hsv, _yellow_lower, _yellow_upper) > 0).astype(np.uint8)
+    mask_white = (cv2.inRange(hsv, _white_lower, _white_upper) > 0).astype(np.uint8)
+
+    # --- Combine ---
+    mask_left = mask_ground * mask_left_half * mask_yellow
+    mask_right = mask_ground * mask_right_half * mask_white
+
+    return mask_left, mask_right
 
 def set_hsv_bounds(yellow_lower, yellow_upper, white_lower, white_upper):
     global _yellow_lower, _yellow_upper, _white_lower, _white_upper
