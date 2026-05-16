@@ -1,3 +1,14 @@
+"""
+Godot-backed camera driver.
+
+Receives frames from Godot CameraTcpStreamer via TCP.
+
+Protocol:
+    4 bytes  : ASCII magic b'GIMG' or b'GPNG'
+    4 bytes  : uint32_be payload length N (big-endian / network byte order)
+    N bytes  : encoded image (jpeg/png)
+"""
+
 import socket
 import struct
 import threading
@@ -57,13 +68,26 @@ class GodotCameraDriver(CameraDriverAbs):
         self._recv_thread.start()
 
     def _recv_loop(self):
-        """Background thread: continuously drain socket and store latest frame."""
+        """Background thread: drain socket, store latest frame, re-accept on disconnect."""
         while self._recv_running:
+            # Re-accept if connection dropped (e.g. Godot scene change)
+            if self._conn is None:
+                try:
+                    self._srv.settimeout(2.0)
+                    self._conn, self._addr = self._srv.accept()
+                    self._conn.settimeout(self.godot_cfg.recv_timeout_s)
+                    print(f"[GodotCameraDriver] Reconnected by {self._addr}")
+                except socket.timeout:
+                    continue
+                except Exception as e:
+                    print(f"[GodotCameraDriver] Accept error: {e}")
+                    break
+
             try:
                 magic = self._recv_exact(4)
                 if magic not in (b"GIMG", b"GPNG"):
                     if not self._resync_to_magic():
-                        break
+                        raise ConnectionError("Lost sync")
 
                 length_bytes = self._recv_exact(4)
                 n = struct.unpack("<I", length_bytes)[0]
@@ -82,11 +106,19 @@ class GodotCameraDriver(CameraDriverAbs):
                         self._frame_condition.notify_all()
 
             except (ConnectionError, socket.timeout) as e:
-                print(f"[GodotCameraDriver] Recv error: {e}")
-                break
+                print(f"[GodotCameraDriver] Disconnected ({e}), waiting for reconnect...")
+                try:
+                    self._conn.close()
+                except Exception:
+                    pass
+                self._conn = None
             except Exception as e:
                 print(f"[GodotCameraDriver] Recv loop error: {e}")
-                break
+                try:
+                    self._conn.close()
+                except Exception:
+                    pass
+                self._conn = None
 
         with self._frame_condition:
             self._recv_running = False

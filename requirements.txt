@@ -1,5 +1,5 @@
 # Requirements for running simulation on your computer
-# Install: pip install -r requirements-sim.txt
+# Install: pip install -r requirements.txt
 
 flask
 opencv-python<4.10
@@ -9,3 +9,4 @@ requests
 pyserial
 jupyter
 matplotlib
+onnxruntime

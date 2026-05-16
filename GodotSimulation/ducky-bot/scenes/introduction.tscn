@@ -5,6 +5,7 @@
 [ext_resource type="Texture2D" uid="uid://ctpxnl5i08jgn" path="res://textures/leafy_grass_diff_4k.png" id="3_7jnuq"]
 [ext_resource type="Texture2D" uid="uid://dmarl4bfd7bia" path="res://textures/leafy_grass_nor_gl_4k.png" id="4_knh3t"]
 [ext_resource type="PackedScene" uid="uid://3d3mqjeeyhw6" path="res://scenes/IntroductionBase.tscn" id="5_16krj"]
+[ext_resource type="PackedScene" uid="uid://cghelvr8fx5bv" path="res://models/VehicleCorected.glb" id="7_e1131"]
 [ext_resource type="PackedScene" uid="uid://b7ugvo11ae2ss" path="res://scenes/DuckieRagdool.tscn" id="7_k15ss"]
 
 [sub_resource type="WorldBoundaryShape3D" id="WorldBoundaryShape3D_lqe0e"]
@@ -40,7 +41,7 @@ shape = SubResource("WorldBoundaryShape3D_lqe0e")
 [node name="NavigationObstacle3D" type="NavigationObstacle3D" parent="." unique_id=1002268349]
 
 [node name="MeshInstance3D" type="MeshInstance3D" parent="." unique_id=582045447]
-transform = Transform3D(10.057154, 0, 0, 0, 10.057154, 0, 0, 0, 10.057154, 4.5697584, 0.00669533, -0.9157721)
+transform = Transform3D(10.057154, 0, 0, 0, 10.057154, 0, 0, 0, 10.057154, 4.9519005, 0, -1.3271989)
 material_override = SubResource("StandardMaterial3D_g70oi")
 mesh = SubResource("PlaneMesh_v2526")
 
@@ -90,3 +91,6 @@ transform = Transform3D(-0.9157608, 0, -0.401724, 0, 1, 0, 0.401724, 0, -0.91576
 
 [node name="Duckie7" parent="Ducks" unique_id=1427225351 instance=ExtResource("7_k15ss")]
 transform = Transform3D(0.8256456, 0, -0.5641891, 0, 1, 0, 0.5641891, 0, 0.8256456, 7.236731, 0.061383232, 0.7897048)
+
+[node name="VehicleCorected" parent="." unique_id=1056507017 instance=ExtResource("7_e1131")]
+transform = Transform3D(0.59873, 0, -0.8009509, 0, 1, 0, 0.8009509, 0, 0.59873, 5.563538, 0.046961177, 3.072847)

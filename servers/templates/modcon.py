@@ -115,13 +115,7 @@ _CONTENT = '''
                     <div class="slider-label"><span>Gain</span><span style="color:var(--text-muted)">0.1 to 1.0</span></div>
                     <input type="number" id="calib-gain" step="0.05" min="0.1" max="1.0" value="{{ gain }}" class="input-box" style="width:100%">
                 </div>
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;margin-bottom:8px">
-                    <button onclick="testDrive('straight',3)" class="button" style="margin:0;font-size:11px">&#9654; Straight 3s</button>
-                    <button onclick="testDrive('straight',5)" class="button" style="margin:0;font-size:11px">&#9654; Straight 5s</button>
-                    <button onclick="testDrive('turn',2)"     class="button" style="margin:0;font-size:11px">&#8635; Turn 2s</button>
-                    <button onclick="stopManeuver()"          class="button danger" style="margin:0;font-size:11px">&#9632; Stop</button>
-                </div>
-                <button onclick="saveCalibration()" class="button success">Save Calibration to Disk</button>
+                <button onclick="saveCalibration()" class="button">Apply</button>
                 <div id="calib-status" class="status"></div>
             </div>
             {% endif %}

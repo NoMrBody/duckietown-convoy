@@ -42,3 +42,4 @@ def wait_for_port_file(path, timeout=15, poll_interval=0.25):
         f"Godot port file '{path}' not found after {timeout}s. "
         "Is Godot running?"
     )
+                                                

@@ -164,9 +164,35 @@ func _process(_delta: float) -> void:
 				game_over = false
 				print("[WheelServer] Game reset by Python")
 
+		elif msg_type == "remove_objects":
+			var filter_str: String = str(d.get("filter", "")).to_lower()
+			if filter_str != "":
+				_remove_matching(get_tree().get_root(), filter_str)
+
+		elif msg_type == "change_scene":
+			var scene_path: String = str(d.get("scene", ""))
+			if scene_path != "":
+				print("[WheelServer] Changing scene to: ", scene_path)
+				get_tree().change_scene_to_file.call_deferred(scene_path)
+
 		elif msg_type == "get_state":
 			# Send current game state to Python
 			_send_state()
+
+func _remove_matching(node: Node, filter: String) -> bool:
+	for child in node.get_children():
+		if child == get_parent():
+			# Don't free the robot node itself; still recurse into it
+			if _remove_matching(child, filter):
+				return true
+			continue
+		if child.name.to_lower().contains(filter):
+			child.queue_free()
+			print("[WheelServer] Removed: ", child.name)
+			return true
+		if _remove_matching(child, filter):
+			return true
+	return false
 
 func _send_state() -> void:
 	if peer == null:

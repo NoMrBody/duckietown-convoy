@@ -68,7 +68,7 @@ func _physics_process(delta: float) -> void:
 
 	var omega: float = (v_right - v_left) / baseline
 	omega = clamp(omega, -max_turn_rate, max_turn_rate)
-	_current_omega = lerp(_current_omega, omega, delta * 2.0)
+	_current_omega = omega
 	rotate_y(_current_omega * delta)
 
 	if is_on_floor():

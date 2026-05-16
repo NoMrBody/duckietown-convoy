@@ -179,7 +179,7 @@ def launch_godot(godot_path=None, debug=False, camera_port=None, wheel_port_hint
     imported_dir = os.path.join(GODOT_PROJECT, '.godot', 'imported')
     needs_import = not (os.path.isdir(imported_dir) and
                         any(f.endswith(('.scn', '.res', '.mesh')) for f in os.listdir(imported_dir)))
-    if True:
+    if needs_import:
         print("⏳ Importing Godot project assets (first run only)...")
         try:
             subprocess.run([godot_path, '--path', GODOT_PROJECT, '--import', '--headless'],
@@ -335,6 +335,8 @@ def package_task(task_name):
             return None
         return tarinfo
 
+    task_models_dir = os.path.join(PROJECT_ROOT, 'tasks', task_name, 'models')
+
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode='w:gz') as tar:
         print(f"   Adding packages: tasks/{task_name}/packages/")
@@ -342,6 +344,9 @@ def package_task(task_name):
         if os.path.exists(config_dir):
             print(f"   Adding configs: config/")
             tar.add(config_dir, arcname='config', filter=no_pycache)
+        if os.path.exists(task_models_dir):
+            print(f"   Adding models: tasks/{task_name}/models/")
+            tar.add(task_models_dir, arcname=f'tasks/{task_name}/models', filter=no_pycache)
 
     buf.seek(0)
     print("Package created!")

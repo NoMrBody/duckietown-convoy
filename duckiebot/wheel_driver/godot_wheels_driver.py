@@ -196,6 +196,38 @@ class GodotWheelTransport:
             print(f"[GodotWheelTransport] Reset send failed: {e}")
             self.close()
 
+    def send_remove_objects(self, name_filter: str) -> None:
+        if not self._ensure_connected():
+            return
+
+        msg = {"type": "remove_objects", "filter": name_filter}
+        payload = json.dumps(msg).encode("utf-8")
+        header = struct.pack("!I", len(payload))
+
+        try:
+            assert self._sock is not None
+            self._sock.sendall(header + payload)
+            print(f"[GodotWheelTransport] Sent remove_objects filter={name_filter!r}")
+        except Exception as e:
+            print(f"[GodotWheelTransport] remove_objects send failed: {e}")
+            self.close()
+
+    def send_change_scene(self, scene_path: str) -> None:
+        if not self._ensure_connected():
+            return
+
+        msg = {"type": "change_scene", "scene": scene_path}
+        payload = json.dumps(msg).encode("utf-8")
+        header = struct.pack("!I", len(payload))
+
+        try:
+            assert self._sock is not None
+            self._sock.sendall(header + payload)
+            print(f"[GodotWheelTransport] Sent change_scene path={scene_path!r}")
+        except Exception as e:
+            print(f"[GodotWheelTransport] change_scene send failed: {e}")
+            self.close()
+
     def is_game_over(self) -> bool:
         self._check_incoming()
         return self.game_state.game_over
@@ -251,6 +283,12 @@ class GodotWheelsDriver(WheelsDriverAbs):
 
     def reset_game(self) -> None:
         self.transport.send_reset()
+
+    def remove_objects(self, name_filter: str) -> None:
+        self.transport.send_remove_objects(name_filter)
+
+    def change_scene(self, scene_path: str) -> None:
+        self.transport.send_change_scene(scene_path)
 
     def set_game_over_callback(self, callback: Callable[[GameState], None]) -> None:
         self.transport.set_game_over_callback(callback)
