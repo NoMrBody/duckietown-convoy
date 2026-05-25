@@ -2,20 +2,20 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://dcc3htosojgky"
-path.s3tc="res://.godot/imported/circleroad_Seamless-Black-Asphalt-Road-Texture.webp-7de5fb49022ab480d5b98f76a75c182b.s3tc.ctex"
+uid="uid://cppwdcjykyhgw"
+path.s3tc="res://.godot/imported/lane_follower_Final_curve.png-c2b84071144c6e157ddd08d0a18d0e73.s3tc.ctex"
 metadata={
 "imported_formats": ["s3tc_bptc"],
 "vram_texture": true
 }
 generator_parameters={
-"md5": "8ff46c2a26b4760725761cbf557afe97"
+"md5": "0fa10940c92eaada3af03bd3458ed20a"
 }
 
 [deps]
 
-source_file="res://textures/circleroad_Seamless-Black-Asphalt-Road-Texture.webp"
-dest_files=["res://.godot/imported/circleroad_Seamless-Black-Asphalt-Road-Texture.webp-7de5fb49022ab480d5b98f76a75c182b.s3tc.ctex"]
+source_file="res://textures/lane_follower_Final_curve.png"
+dest_files=["res://.godot/imported/lane_follower_Final_curve.png-c2b84071144c6e157ddd08d0a18d0e73.s3tc.ctex"]
 
 [params]
 

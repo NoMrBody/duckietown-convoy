@@ -2,20 +2,20 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://dcc3htosojgky"
-path.s3tc="res://.godot/imported/circleroad_Seamless-Black-Asphalt-Road-Texture.webp-7de5fb49022ab480d5b98f76a75c182b.s3tc.ctex"
+uid="uid://c5gyofrfs7lcb"
+path.s3tc="res://.godot/imported/Stopsign_wood.webp-d3a49e5cf6e81b7e4b76d0a0103ea0ca.s3tc.ctex"
 metadata={
 "imported_formats": ["s3tc_bptc"],
 "vram_texture": true
 }
 generator_parameters={
-"md5": "8ff46c2a26b4760725761cbf557afe97"
+"md5": "dad918ab57b5690dc4ad4452f2f5bb43"
 }
 
 [deps]
 
-source_file="res://textures/circleroad_Seamless-Black-Asphalt-Road-Texture.webp"
-dest_files=["res://.godot/imported/circleroad_Seamless-Black-Asphalt-Road-Texture.webp-7de5fb49022ab480d5b98f76a75c182b.s3tc.ctex"]
+source_file="res://models/Stopsign_wood.webp"
+dest_files=["res://.godot/imported/Stopsign_wood.webp-d3a49e5cf6e81b7e4b76d0a0103ea0ca.s3tc.ctex"]
 
 [params]
 

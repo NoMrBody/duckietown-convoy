@@ -2,20 +2,20 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://dcc3htosojgky"
-path.s3tc="res://.godot/imported/circleroad_Seamless-Black-Asphalt-Road-Texture.webp-7de5fb49022ab480d5b98f76a75c182b.s3tc.ctex"
+uid="uid://c8uuje8xpm8b1"
+path.s3tc="res://.godot/imported/KiuPathObj_stop.png-526d938152d5d517ca8cc202bf06ccdf.s3tc.ctex"
 metadata={
 "imported_formats": ["s3tc_bptc"],
 "vram_texture": true
 }
 generator_parameters={
-"md5": "8ff46c2a26b4760725761cbf557afe97"
+"md5": "b924482727981f30cc7704b5fc50444f"
 }
 
 [deps]
 
-source_file="res://textures/circleroad_Seamless-Black-Asphalt-Road-Texture.webp"
-dest_files=["res://.godot/imported/circleroad_Seamless-Black-Asphalt-Road-Texture.webp-7de5fb49022ab480d5b98f76a75c182b.s3tc.ctex"]
+source_file="res://textures/KiuPathObj_stop.png"
+dest_files=["res://.godot/imported/KiuPathObj_stop.png-526d938152d5d517ca8cc202bf06ccdf.s3tc.ctex"]
 
 [params]
 

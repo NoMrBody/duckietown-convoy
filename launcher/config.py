@@ -13,11 +13,11 @@ SCRIPTS_DIR = PROJECT_ROOT / 'scripts'
 GODOT_PROJECT = GODOT_DIR
 GODOT_SCENES = {
     'braitenberg': 'res://scenes/braitenberg.tscn',
-    'visual_lane_servoing': 'res://scenes/map_follower.tscn',
-    'introduction': 'res://scenes/introduction.tscn',
-    'modcon': 'res://scenes/Modconpath.tscn',
-    'navigator': 'res://scenes/map_follower.tscn',
-    'object_detection': 'res://scenes/lane_detect.tscn',
+    'visual_lane_servoing': 'res://scenes/maps/lane_follower.tscn',
+    'introduction': 'res://scenes/maps/introduction.tscn',
+    'modcon': 'res://scenes/maps/Modconpath.tscn',
+    'navigator': 'res://scenes/maps/map_follower.tscn',
+    'object_detection': 'res://scenes/maps/lane_detect.tscn',
 }
 
 DEFAULT_WEB_PORT = 5000

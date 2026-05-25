@@ -2,20 +2,20 @@
 
 importer="texture"
 type="CompressedTexture2D"
-uid="uid://dcc3htosojgky"
-path.s3tc="res://.godot/imported/circleroad_Seamless-Black-Asphalt-Road-Texture.webp-7de5fb49022ab480d5b98f76a75c182b.s3tc.ctex"
+uid="uid://c84fmamfg2l1c"
+path.s3tc="res://.godot/imported/KiuPathObj_parking.png-869333c4e5281945cd6a72dee6dd7381.s3tc.ctex"
 metadata={
 "imported_formats": ["s3tc_bptc"],
 "vram_texture": true
 }
 generator_parameters={
-"md5": "8ff46c2a26b4760725761cbf557afe97"
+"md5": "23b8f14312e05401426b744cad52ce58"
 }
 
 [deps]
 
-source_file="res://textures/circleroad_Seamless-Black-Asphalt-Road-Texture.webp"
-dest_files=["res://.godot/imported/circleroad_Seamless-Black-Asphalt-Road-Texture.webp-7de5fb49022ab480d5b98f76a75c182b.s3tc.ctex"]
+source_file="res://textures/KiuPathObj_parking.png"
+dest_files=["res://.godot/imported/KiuPathObj_parking.png-869333c4e5281945cd6a72dee6dd7381.s3tc.ctex"]
 
 [params]
 

@@ -1,0 +1,8 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="PackedScene" path="res://models/Stopsign.glb" id="1_stop"]
+
+[node name="ObjStopSign" type="Node3D"]
+
+[node name="Sign" parent="." instance=ExtResource("1_stop")]
+transform = Transform3D(0.6, 0, 0, 0, 0.6, 0, 0, 0, 0.6, 0, 0, 0)

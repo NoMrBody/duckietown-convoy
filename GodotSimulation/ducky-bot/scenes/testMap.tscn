@@ -1,10 +1,10 @@
-[gd_scene format=3 uid="uid://do63hi8nnlmfu"]
+[gd_scene format=3 uid="uid://bxeqrvyc7fyky"]
 
 [ext_resource type="PackedScene" path="res://scenes/tiles/tile_straight.tscn" id="1_jb3q8"]
 [ext_resource type="PackedScene" uid="uid://kk23g4aorp7c" path="res://models/goatedStraight.glb" id="2_o2jif"]
 [ext_resource type="PackedScene" path="res://scenes/tiles/tile_curve.tscn" id="3_fl73v"]
 [ext_resource type="PackedScene" uid="uid://djvw5rayvkcut" path="res://models/goatedcurved.glb" id="4_16jec"]
-[ext_resource type="PackedScene" uid="uid://by8pqr474iaqj" path="res://scenes/duckie_bot.tscn" id="5_jfjcc"]
+[ext_resource type="PackedScene" uid="uid://by8pqr474iaqj" path="res://scenes/robot/duckie_bot.tscn" id="5_jfjcc"]
 [ext_resource type="Environment" uid="uid://xlfv0dsmbfcm" path="res://Environment.tres" id="6_q2rnq"]
 [ext_resource type="Texture2D" uid="uid://ctpxnl5i08jgn" path="res://textures/leafy_grass_diff_4k.png" id="7_fl73v"]
 [ext_resource type="Texture2D" uid="uid://dmarl4bfd7bia" path="res://textures/leafy_grass_nor_gl_4k.png" id="8_16jec"]
