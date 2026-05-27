@@ -8,7 +8,7 @@ script_dir   = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.join(script_dir, '..', '..')
 sys.path.insert(0, project_root)
 
-from flask import Flask, Response, jsonify
+from flask import Flask, Response, jsonify, request
 import numpy as np
 import cv2
 
@@ -20,6 +20,20 @@ from launcher.ports import find_available_port
 from servers.common import make_frame_generator, shutdown_cleanup, suppress_http_logs
 
 import tasks.project.packages.agent as agent
+
+INDEX_HTML = """<!doctype html>
+<html><head><meta charset="utf-8"><title>Project — DuckieBot</title>
+<style>
+  body { margin:0; background:#111; color:#eee; font-family:sans-serif; }
+  header { padding:12px 16px; background:#1a1a1a; border-bottom:1px solid #333; }
+  main { display:flex; justify-content:center; padding:16px; }
+  img.stream { max-width:100%; height:auto; border:1px solid #333; background:#000; }
+</style></head>
+<body>
+  <header><strong>Project</strong> — Real Duckiebot</header>
+  <main><img class="stream" src="/video" alt="camera"></main>
+</body></html>
+"""
 
 app        = Flask(__name__)
 camera     = None
@@ -40,10 +54,25 @@ def _visualize(frame):
 generate_frames = make_frame_generator(lambda: camera, _visualize, quality=70, rgb=False)
 
 
+@app.route('/')
+def index():
+    return INDEX_HTML
+
+
 @app.route('/video')
 def video():
     return Response(generate_frames(),
                     mimetype='multipart/x-mixed-replace; boundary=frame')
+
+
+@app.route('/status')
+def status():
+    return jsonify({})
+
+
+@app.route('/command', methods=['POST'])
+def command():
+    return jsonify({'status': 'ok'})
 
 
 @app.route('/shutdown')

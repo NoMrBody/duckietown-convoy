@@ -1,0 +1,10 @@
+# HSV bounds for the lead bot's two red rear LEDs.
+# Red wraps hue=0 in OpenCV's H=[0,180] space, so two ranges are OR'd together.
+red_low_h_min:  0
+red_low_h_max:  10
+red_high_h_min: 160
+red_high_h_max: 180
+s_min: 120
+s_max: 255
+v_min: 120
+v_max: 255
