@@ -118,7 +118,10 @@ class ConvoyFSM:
 
     def _pick_steering(self, wm: WorldModel) -> float:
         if wm.leader is not None and not wm.lane.healthy:
-            steer = self.leader_p_gain * wm.leader.lateral
+            # leader.lateral is +ve when the leader is on the RIGHT; the wheel mix
+            # (left=base-steer, right=base+steer) needs +ve steer to turn RIGHT, so
+            # negate to steer TOWARD the leader (matches the lane convention).
+            steer = -self.leader_p_gain * wm.leader.lateral
             return max(-self.max_steer, min(self.max_steer, steer))
         return wm.lane.steering_suggestion
 

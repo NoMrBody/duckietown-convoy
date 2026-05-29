@@ -4,8 +4,12 @@ from tasks.project.packages.fsm import Decision
 
 
 def motors_from_decision(d: Decision) -> Tuple[float, float]:
-    left = d.base_speed - d.steering
-    right = d.base_speed + d.steering
+    # Clamp steering to the base speed so a turn arcs forward instead of
+    # collapsing into a single-wheel pivot; base==0 still yields a full stop.
+    base = d.base_speed
+    steer = max(-base, min(base, d.steering))
+    left = base - steer
+    right = base + steer
     return _clip01(left), _clip01(right)
 
 
