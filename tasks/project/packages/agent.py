@@ -27,6 +27,7 @@ def main(camera, wheels, leds, stop_event):
 
     last_state = None
     last_hw_warn = 0.0
+    last_dbg = 0.0
     try:
         while not stop_event.is_set():
             ok, frame = camera.read()
@@ -38,6 +39,15 @@ def main(camera, wheels, leds, stop_event):
             wm = perception.update(frame, now)
             decision = fsm.step(wm)
             left, right = motors_from_decision(decision)
+
+            if now - last_dbg > 0.5:
+                dbg = perception.last_debug_info
+                print(f"[project] {decision.state_name} "
+                      f"pair_px={dbg.get('led_pair_px')} src={dbg.get('leader_source')} "
+                      f"tags={dbg.get('apriltag_ids')} "
+                      f"base={decision.base_speed:.2f} steer={decision.steering:+.2f} "
+                      f"L={left:.2f} R={right:.2f}")
+                last_dbg = now
 
             try:
                 wheels.set_wheels_speed(left, right)
