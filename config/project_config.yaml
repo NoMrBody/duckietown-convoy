@@ -18,8 +18,15 @@ max_steer:            0.4
 # Perception
 lane_healthy_min_pixels: 500   # below this, fall back to leader-bbox steering
 leader_lower_half_only:  true  # ignore truck detections in the upper half of the frame
-qr_search_factor:        1.5   # crop height below a sign bbox, in multiples of bbox height
 detection_cache_ttl:     5     # frames to reuse last detection list during inference skips
+
+# AprilTag traffic signs (Duckietown standard). Detected via cv2.aruco.
+# Find your signs' tag IDs by running the task and reading the "tags=[...]"
+# value the agent prints, then list the relevant IDs below.
+apriltag_family:    tag36h11   # tag36h11 | tag36h10 | tag25h9 | tag16h5
+apriltag_stop_ids:  []         # tag IDs that mean STOP
+apriltag_slow_ids:  []         # tag IDs that mean SLOW
+apriltag_min_area_px: 0        # ignore tags smaller than this (px²); 0 = any size
 
 # LED-based leader detection (lead bot's two steady-on red rear LEDs)
 led_min_area_px:         4
