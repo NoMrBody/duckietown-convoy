@@ -1,23 +1,19 @@
-from dataclasses import dataclass, field
-from typing import Dict, Tuple
-
+from tasks.project.packages.fsm_common import (
+    Decision,
+    LedColor,
+    BLUE as _BLUE,
+    GREEN as _GREEN,
+    OFF as _OFF,
+    RED as _RED,
+    YELLOW as _YELLOW,
+)
 from tasks.project.packages.world_model import WorldModel
-
-LedColor = Tuple[float, float, float]
 
 STATE_STOP = "STOP_AT_SIGN"
 STATE_SLOW = "SLOW_ZONE"
 STATE_FOLLOW = "FOLLOW"
 STATE_LANE = "LANE_FOLLOW"
 STATE_HOLD = "HOLD"
-
-
-@dataclass
-class Decision:
-    state_name: str
-    base_speed: float
-    steering: float
-    leds: Dict[int, LedColor] = field(default_factory=dict)
 
 
 class ConvoyFSM:
@@ -145,10 +141,3 @@ class ConvoyFSM:
             steering=steering,
             leds=leds,
         )
-
-
-_RED: LedColor = (1.0, 0.0, 0.0)
-_YELLOW: LedColor = (1.0, 1.0, 0.0)
-_GREEN: LedColor = (0.0, 1.0, 0.0)
-_BLUE: LedColor = (0.0, 0.0, 1.0)
-_OFF: LedColor = (0.0, 0.0, 0.0)

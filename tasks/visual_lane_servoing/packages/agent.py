@@ -83,6 +83,19 @@ class LaneServoingAgent:
         self._last_time         = None
         self.last_debug_info    = self._empty_debug_info(480, 640)
 
+    def reset(self):
+        """Clear PID/coast/smoothing state. Call when handing control back to
+        lane following after an open-loop maneuver (e.g. an intersection turn),
+        so the stale last command can't lurch the bot on re-entry."""
+        self._prev_error      = 0.0
+        self._filtered_error  = 0.0
+        self._coast_remaining = 0
+        self._left_history.clear()
+        self._right_history.clear()
+        self._last_left       = 0.0
+        self._last_right      = 0.0
+        self._last_time       = None
+
     def _calculate_error(self, yellow_xs, white_xs, left_det, right_det, w):
         if left_det and right_det and yellow_xs and white_xs:
             y_mean = float(np.mean(yellow_xs))

@@ -1,0 +1,54 @@
+# ============================================================================
+# LEAD bot config (project_lead). Autonomous lane follower that obeys traffic
+# signs and drives a fixed route, executing a maneuver at each red-line
+# intersection. Many values below need field tuning on the real floor/lighting.
+# ============================================================================
+
+# --- speeds ---
+cruise_speed: 0.30
+slow_factor:  0.50          # SLOW_ZONE speed = cruise * slow_factor
+
+# --- sign timing (seconds) ---
+stop_duration: 1.0          # halt this long at a STOP sign / intersection
+slow_duration: 1.5
+slow_cooldown: 3.0
+
+# --- fixed route ---
+# Steps consumed one-per-intersection (each red-line event). Tokens:
+#   straight | right | left | stop   (stop = final, latched halt)
+route: [straight, right, straight, left, stop]
+
+# --- maneuver shape / timing (FIELD-TUNE) ---
+turn_base_speed:    0.25    # forward speed during a turn arc
+turn_steer:         0.25    # steer magnitude during a turn (clamped to base by control)
+cross_base_speed:   0.25    # forward speed crossing straight through an intersection
+min_turn_s:         0.8     # don't accept lane-reacquire exit before this
+max_turn_s:         3.0     # hard timeout for a turn
+min_cross_s:        0.4
+max_cross_s:        2.0
+turn_yaw_target_rad: 1.40   # ~80 deg; encoder-yaw early exit (used only if encoders present)
+slow_after_turn_s:  2.0     # slow window after a maneuver so the follower reacquires
+slow_after_factor:  0.6     # speed during that window = cruise * this
+wheel_baseline_m:   0.10    # wheel-to-wheel distance for encoder yaw estimate
+
+# --- red stop-line firing gates (FIELD-TUNE) ---
+stopline_fire_dist:   0.45  # red-line dist_proxy >= this (0=far .. 1=near) to fire
+stopline_fire_width:  0.40  # red-line must span >= this fraction of frame width
+stopline_clear_frames: 5    # frames the line must be absent before the next event can fire
+
+# --- red stop-line geometry ---
+stopline_band_top_frac: 0.72   # detection band (low in frame)
+stopline_band_bot_frac: 0.98
+stopline_min_width_frac: 0.35  # a line spans a large fraction of width
+stopline_min_aspect:     3.0   # width/height: wide & short, not a blob
+stopline_min_area_px:    250
+
+# --- perception ---
+lane_healthy_min_pixels: 500
+
+# --- AprilTag traffic signs (Duckietown standard; cv2.aruco) ---
+# Run the lead and read the printed "tags=[...]" to discover IDs, then fill in.
+apriltag_family:    tag36h11   # tag36h11 | tag36h10 | tag25h9 | tag16h5
+apriltag_stop_ids:  []         # tag IDs that mean STOP
+apriltag_slow_ids:  []         # tag IDs that mean SLOW
+apriltag_min_area_px: 400      # ignore far-away tags so signs don't arm too early

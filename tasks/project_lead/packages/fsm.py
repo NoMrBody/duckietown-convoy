@@ -1,0 +1,201 @@
+"""Lead-bot finite state machine: autonomous lane following with traffic-sign
+slowing/stopping and a fixed programmed route executed at red-line intersections.
+
+The lead follows no one. It:
+  - lane-follows on straightaways,
+  - slows in SLOW zones (AprilTag SLOW signs),
+  - remembers a STOP sign across the gap until the intersection's red line, halts
+    ~1s, then executes the next route maneuver (turn left/right, cross straight,
+    or final stop),
+  - slows briefly after each maneuver so the follower can reacquire it.
+
+Pure logic over a WorldModel + an optional encoder-derived yaw, so it is unit
+testable without the vision stack or hardware.
+"""
+from typing import Optional
+
+from tasks.project.packages.fsm_common import (
+    Decision, GREEN, RED, WHITE, YELLOW, all_leds, clamp,
+)
+from tasks.project.packages.world_model import WorldModel
+
+STATE_LANE       = "LANE_FOLLOW"
+STATE_STOP       = "STOP_AT_SIGN"
+STATE_SLOW       = "SLOW_ZONE"
+STATE_CROSS      = "CROSS_STRAIGHT"
+STATE_TURN_L     = "TURN_LEFT"
+STATE_TURN_R     = "TURN_RIGHT"
+STATE_SLOW_AFTER = "SLOW_AFTER_TURN"
+STATE_DONE       = "ROUTE_DONE"
+
+_TURN_STEPS = ("left", "right")
+_MANEUVER_STEPS = ("left", "right", "straight")
+
+
+class LeadFSM:
+    def __init__(self, cfg: Optional[dict] = None):
+        cfg = cfg or {}
+        self.cruise_speed = float(cfg.get("cruise_speed", 0.3))
+        self.slow_factor  = float(cfg.get("slow_factor", 0.5))
+        self.stop_duration = float(cfg.get("stop_duration", 1.0))
+        self.slow_duration = float(cfg.get("slow_duration", 1.5))
+        self.slow_cooldown = float(cfg.get("slow_cooldown", 3.0))
+
+        self.route = [str(s).lower() for s in (cfg.get("route") or ["stop"])]
+
+        # Maneuver shape / timing
+        self.turn_base   = float(cfg.get("turn_base_speed", 0.25))
+        self.turn_steer  = float(cfg.get("turn_steer", self.turn_base))
+        self.cross_base  = float(cfg.get("cross_base_speed", 0.25))
+        self.min_turn_s  = float(cfg.get("min_turn_s", 0.8))
+        self.max_turn_s  = float(cfg.get("max_turn_s", 3.0))
+        self.min_cross_s = float(cfg.get("min_cross_s", 0.4))
+        self.max_cross_s = float(cfg.get("max_cross_s", 2.0))
+        self.turn_yaw_target = float(cfg.get("turn_yaw_target_rad", 1.40))  # ~80 deg
+        self.slow_after_turn_s = float(cfg.get("slow_after_turn_s", 2.0))
+        self.slow_after_factor = float(cfg.get("slow_after_factor", 0.6))
+
+        # Red-line intersection firing gates + clear latch
+        self.fire_dist   = float(cfg.get("stopline_fire_dist", 0.45))
+        self.fire_width  = float(cfg.get("stopline_fire_width", 0.40))
+        self.clear_frames = int(cfg.get("stopline_clear_frames", 5))
+
+        # mutable state
+        self.route_idx = 0
+        self._stop_until = -1.0
+        self._slow_until = -1.0
+        self._slow_cooldown_until = -1.0
+        self._sign_pending = False
+        self._maneuver: Optional[str] = None
+        self._maneuver_start = 0.0
+        self._slow_after_until = -1.0
+        self._pending_step: Optional[str] = None
+        self._consumed = False
+        self._red_clear = 0
+        self._done = False
+
+        # surfaced for the agent/debug
+        self.request_lane_reset = False
+        self.last_step: Optional[str] = None
+
+    # --- public ---------------------------------------------------------------
+    def step(self, wm: WorldModel, turn_yaw_rad: Optional[float] = None) -> Decision:
+        self.request_lane_reset = False
+        t = wm.t
+        self._update_latch(wm)
+        self._ingest_signs(wm)
+
+        if self._done:
+            return self._decide(STATE_DONE, 0.0, 0.0, RED)
+
+        # 1) an active maneuver takes precedence
+        if self._maneuver is not None:
+            return self._run_maneuver(wm, t, turn_yaw_rad)
+
+        # 2) halting at the line for a pending STOP
+        if t < self._stop_until:
+            return self._decide(STATE_STOP, 0.0, 0.0, RED)
+        if self._pending_step is not None:
+            step = self._pending_step
+            self._pending_step = None
+            self._begin_step(step, t)
+            if self._done:
+                return self._decide(STATE_DONE, 0.0, 0.0, RED)
+            return self._run_maneuver(wm, t, turn_yaw_rad)
+
+        # 3) slow-after-turn window (give the follower time to reacquire)
+        if t < self._slow_after_until:
+            return self._decide(STATE_SLOW_AFTER, self.cruise_speed * self.slow_after_factor,
+                                wm.lane.steering_suggestion, YELLOW)
+
+        # 4) intersection event -> consume the next route step
+        if self._intersection_fires(wm):
+            self._consumed = True
+            self._red_clear = 0
+            step = self.route[self.route_idx] if self.route_idx < len(self.route) else "stop"
+            self.route_idx += 1
+            self.last_step = step
+            if self._sign_pending:
+                self._sign_pending = False
+                self._stop_until = t + self.stop_duration
+                self._pending_step = step  # maneuver begins after the 1s halt
+                return self._decide(STATE_STOP, 0.0, 0.0, RED)
+            self._begin_step(step, t)
+            if self._done:
+                return self._decide(STATE_DONE, 0.0, 0.0, RED)
+            return self._run_maneuver(wm, t, turn_yaw_rad)
+
+        # 5) slow zone (timed)
+        if t < self._slow_until:
+            return self._decide(STATE_SLOW, self.cruise_speed * self.slow_factor,
+                                wm.lane.steering_suggestion, YELLOW)
+
+        # 6) default: lane following
+        return self._decide(STATE_LANE, self.cruise_speed, wm.lane.steering_suggestion, GREEN)
+
+    # --- internals ------------------------------------------------------------
+    def _ingest_signs(self, wm: WorldModel) -> None:
+        kinds = {s.kind for s in wm.signs}
+        if "STOP" in kinds:
+            self._sign_pending = True  # remembered until the intersection consumes it
+        if "SLOW" in kinds and wm.t >= self._slow_cooldown_until:
+            self._slow_until = wm.t + self.slow_duration
+            self._slow_cooldown_until = wm.t + self.slow_duration + self.slow_cooldown
+
+    def _update_latch(self, wm: WorldModel) -> None:
+        rl = wm.red_line
+        red_present = rl is not None and rl.present and rl.width_frac >= (self.fire_width * 0.5)
+        if red_present:
+            self._red_clear = 0
+        else:
+            self._red_clear += 1
+            if self._consumed and self._red_clear >= self.clear_frames:
+                self._consumed = False  # cleared the line -> ready for next intersection
+
+    def _intersection_fires(self, wm: WorldModel) -> bool:
+        rl = wm.red_line
+        if rl is None or not rl.present or self._consumed:
+            return False
+        return rl.dist_proxy >= self.fire_dist and rl.width_frac >= self.fire_width
+
+    def _begin_step(self, step: str, t: float) -> None:
+        if step == "stop":
+            self._done = True
+            self._maneuver = None
+            return
+        self._maneuver = step if step in _MANEUVER_STEPS else "straight"
+        self._maneuver_start = t
+
+    def _run_maneuver(self, wm: WorldModel, t: float, turn_yaw_rad: Optional[float]) -> Decision:
+        step = self._maneuver
+        elapsed = t - self._maneuver_start
+        is_turn = step in _TURN_STEPS
+        min_s = self.min_turn_s if is_turn else self.min_cross_s
+        max_s = self.max_turn_s if is_turn else self.max_cross_s
+
+        done = False
+        if elapsed >= max_s:                                   # hard timeout
+            done = True
+        elif is_turn and turn_yaw_rad is not None and abs(turn_yaw_rad) >= self.turn_yaw_target:
+            done = True                                        # encoder yaw target reached
+        elif elapsed >= min_s and wm.lane.healthy:
+            done = True                                        # lane reacquired -> self-correct
+
+        if done:
+            self._maneuver = None
+            self._slow_after_until = t + self.slow_after_turn_s
+            self.request_lane_reset = True  # agent clears stale lane PID on re-entry
+            return self._decide(STATE_SLOW_AFTER, self.cruise_speed * self.slow_after_factor,
+                                wm.lane.steering_suggestion, YELLOW)
+
+        if step == "right":
+            # Lane convention: NEGATIVE steering turns right (left wheel faster).
+            return self._decide(STATE_TURN_R, self.turn_base, -self.turn_steer, WHITE)
+        if step == "left":
+            return self._decide(STATE_TURN_L, self.turn_base, +self.turn_steer, WHITE)
+        return self._decide(STATE_CROSS, self.cross_base, 0.0, WHITE)
+
+    @staticmethod
+    def _decide(name: str, speed: float, steering: float, color) -> Decision:
+        return Decision(state_name=name, base_speed=speed,
+                        steering=clamp(steering, -1.0, 1.0), leds=all_leds(color))

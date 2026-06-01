@@ -1,0 +1,42 @@
+# ============================================================================
+# FOLLOWER bot config (project_follow). Pure pursuit of the lead's circle-grid
+# back marker + lane fallback. No traffic-sign logic. Distance values are in the
+# circle-grid mean-dot-spacing proxy (px) and MUST be field-tuned from real
+# footage (read the printed "span=...px" at known gaps).
+# ============================================================================
+
+cruise_speed: 0.30
+
+# --- follow distance taper (FIELD-TUNE: grid mean dot spacing in px) ---
+grid_safe_px:  18      # span <= this  => far  => full cruise speed
+grid_stop_px:  70      # span >= this  => close => zero speed (implicit stop)
+grid_close_px: 55      # lost while span >= this => CLOSE_STOP (don't coast into the lead)
+grid_arm_px:   60      # only start following once a gap this large (span <= this) has opened
+grid_min_score: 0.5
+
+# --- pursuit steering ---
+leader_p_gain: 0.6
+max_steer:     0.4
+
+# --- lost handling ---
+leader_lost_grace_s:    1.0   # window after the grid drops before giving up to lane/HOLD
+reacquire_creep_speed:  0.12  # slow creep while reacquiring into a corner
+reacquire_steer_gain:   0.8   # steer toward the last-seen marker bearing
+reacquire_heading_gain: 0.0   # best-effort tilt feed-forward; off by default (no intrinsics)
+
+# --- lane fallback ---
+lane_healthy_min_pixels: 500
+
+# --- chain signal ---
+rear_led_indices: [3, 4]   # lit red while following, for any further follower
+
+# --- circle-grid tracker (cv2.findCirclesGrid) ---
+grid_cols: 7
+grid_rows: 3
+grid_downscale: 0.5          # downscale gray before detection (perf)
+grid_roi_pad_px: 60          # padding around last hit for the ROI search
+grid_lost_grace_frames: 6    # tracker-level reuse of last estimate on a miss
+grid_use_clustering: false   # CALIB_CB_CLUSTERING: better at steep angles, worse w/ clutter
+grid_blob_min_area: 10       # SimpleBlobDetector dot-area bounds (FIELD-TUNE)
+grid_blob_max_area: 8000
+grid_blob_min_circularity: 0.6

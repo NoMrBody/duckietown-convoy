@@ -1,6 +1,6 @@
 from typing import Tuple
 
-from tasks.project.packages.fsm import Decision
+from tasks.project.packages.fsm_common import Decision
 
 
 def motors_from_decision(d: Decision) -> Tuple[float, float]:
