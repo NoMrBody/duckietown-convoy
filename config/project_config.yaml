@@ -11,7 +11,7 @@ slow_cooldown:  3.0
 # Leader following (distance proxy = bbox height in pixels)
 safe_distance_px:     60     # bbox this small => cruise full speed
 stop_distance_px:    180     # bbox this big  => zero speed
-leader_lost_grace_s:  0.25   # keep FOLLOW state for this long after a missed detection
+leader_lost_grace_s:  1.0    # keep FOLLOW state for this long after a missed detection (increased for stability)
 leader_p_gain:        0.6    # used only when steering from leader bbox
 max_steer:            0.4
 
@@ -36,10 +36,10 @@ led_min_sep_px:          10
 led_max_sep_px:          200
 led_roi_top_frac:        0.30
 led_roi_bot_frac:        0.95
-led_track_radius_px:     60     # ROI radius for next-frame search around last midpoint
-led_lost_grace_frames:   5      # frames to reuse last estimate after a miss
-led_pair_px_max_jump:    25     # reject pairs whose pair_px jumps more than this between frames
-led_min_score:           0.4    # gate for entering FOLLOW from an LED-only fix
+led_track_radius_px:     100    # ROI radius for next-frame search around last midpoint (increased for stability)
+led_lost_grace_frames:   15     # frames to reuse last estimate after a miss (increased for stability)
+led_pair_px_max_jump:    40     # reject pairs whose pair_px jumps more than this between frames (increased for stability)
+led_min_score:           0.3    # gate for entering FOLLOW from an LED-only fix (lowered for easier acquisition)
 
 # Range proxy from inter-LED pixel distance (used when source is led/fused)
 led_safe_pair_px:        20     # pair_px this small => cruise full speed
