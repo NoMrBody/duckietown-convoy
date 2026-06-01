@@ -23,7 +23,7 @@ from servers.common import make_frame_generator, shutdown_cleanup, suppress_http
 import tasks.project.packages.agent as agent
 
 INDEX_HTML = """<!doctype html>
-<html><head><meta charset="utf-8"><title>Project — DuckieBot</title>
+<html><head><meta charset="utf-8"><title>Convoy</title>
 <style>
   body { margin:0; background:#111; color:#eee; font-family:sans-serif; }
   header { padding:12px 16px; background:#1a1a1a; border-bottom:1px solid #333; }
@@ -31,7 +31,7 @@ INDEX_HTML = """<!doctype html>
   img.stream { max-width:100%; height:auto; border:1px solid #333; background:#000; }
 </style></head>
 <body>
-  <header><strong>Project</strong> — Real Duckiebot</header>
+  <header>Final Project</header>
   <main><img class="stream" src="/video" alt="camera"></main>
 </body></html>
 """
