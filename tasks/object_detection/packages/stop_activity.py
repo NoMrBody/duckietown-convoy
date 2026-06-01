@@ -4,12 +4,6 @@ Detection = Tuple[Tuple[int, int, int, int], float, int]
 
 class_names = {0: 'duckie', 1: 'truck', 2: 'sign'}
 
-# Stop if duckie's bottom edge is below this fraction of the frame (i.e. close)
-_PROXIMITY_THRESHOLD = 0.6
-
-# Stop if bounding box area exceeds this (i.e. duckie is large/near)
-_AREA_THRESHOLD = 3000
-
 
 def should_stop(detections: List[Detection], img_size: int) -> Tuple[bool, str]:
     """
