@@ -340,7 +340,6 @@ def package_task(task_name):
 
     # Define dependencies for tasks that import from other tasks
     task_dependencies = {
-        'project': ['object_detection', 'visual_lane_servoing'],
         # The convoy roles share tasks/project/packages as a library and reuse
         # the lane follower. Neither needs object_detection (no YOLO).
         'project_lead':   ['project', 'visual_lane_servoing'],
