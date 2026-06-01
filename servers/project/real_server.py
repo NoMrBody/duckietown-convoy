@@ -3,6 +3,7 @@ import os
 import signal
 import threading
 import argparse
+import queue
 
 script_dir   = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.join(script_dir, '..', '..')
@@ -41,17 +42,101 @@ wheels     = None
 leds       = None
 stop_event = threading.Event()
 
-
-def _visualize(frame):
-    if frame is not None:
-        return frame
-    blank = np.zeros((480, 640, 3), dtype=np.uint8)
-    cv2.putText(blank, "Waiting for camera...", (160, 240),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.8, (80, 80, 80), 2)
-    return blank
+# Frame queue for visualization
+_frame_queue = queue.Queue(maxsize=2)
+_debug_info_lock = threading.Lock()
+_debug_info = {}
 
 
-generate_frames = make_frame_generator(lambda: camera, _visualize, quality=70, rgb=False)
+def visualize(frame_bgr):
+    """Visualize the current frame with debug overlays."""
+    if frame_bgr is None:
+        blank = np.zeros((480, 640, 3), dtype=np.uint8)
+        cv2.putText(blank, "Waiting for camera...", (160, 240),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.8, (80, 80, 80), 2)
+        return blank
+
+    display = frame_bgr.copy()
+    h, w = display.shape[:2]
+
+    # Get debug info
+    with _debug_info_lock:
+        info = _debug_info.copy()
+
+    font = cv2.FONT_HERSHEY_SIMPLEX
+
+    # Draw state and speeds at top
+    state = info.get('state', 'INIT')
+    base_speed = info.get('base_speed', 0.0)
+    steering = info.get('steering', 0.0)
+    left_speed = info.get('left_speed', 0.0)
+    right_speed = info.get('right_speed', 0.0)
+
+    cv2.putText(display, f"State: {state}", (10, 25),
+                font, 0.6, (0, 255, 0), 2)
+    cv2.putText(display, f"Base: {base_speed:.2f} Steer: {steering:+.2f}", (10, 50),
+                font, 0.5, (0, 255, 0), 1)
+    cv2.putText(display, f"L: {left_speed:+.2f}  R: {right_speed:+.2f}", (10, 70),
+                font, 0.5, (0, 255, 0), 1)
+
+    # Draw leader detection info
+    leader_src = info.get('leader_source')
+    if leader_src:
+        pair_px = info.get('led_pair_px')
+        text = f"Leader: {leader_src}"
+        if pair_px:
+            text += f" ({pair_px:.0f}px)"
+        cv2.putText(display, text, (10, h - 60),
+                    font, 0.5, (255, 255, 0), 1)
+
+    # Draw AprilTag info
+    tag_ids = info.get('apriltag_ids', [])
+    if tag_ids:
+        cv2.putText(display, f"Tags: {tag_ids}", (10, h - 40),
+                    font, 0.5, (255, 100, 255), 1)
+
+    # Draw FPS
+    fps = info.get('fps', 0.0)
+    cv2.putText(display, f"{fps:.1f} FPS", (w - 100, 25),
+                font, 0.5, (200, 200, 200), 1)
+
+    return display
+
+
+def generate_frames():
+    """Generate MJPEG frames from the queue shared by the agent."""
+    import time
+    while True:
+        try:
+            # Get frame from queue with timeout
+            frame = _frame_queue.get(timeout=0.5)
+
+            # Apply visualization
+            display = visualize(frame)
+
+            # Encode as JPEG
+            ret, jpeg = cv2.imencode('.jpg', display, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            if not ret:
+                continue
+
+            yield (b'--frame\r\n'
+                   b'Content-Type: image/jpeg\r\n\r\n'
+                   + jpeg.tobytes() + b'\r\n')
+
+        except queue.Empty:
+            # No frame available, show placeholder
+            blank = np.zeros((480, 640, 3), dtype=np.uint8)
+            cv2.putText(blank, "Waiting for frames...", (160, 240),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (80, 80, 80), 2)
+            ret, jpeg = cv2.imencode('.jpg', blank, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            if ret:
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n'
+                       + jpeg.tobytes() + b'\r\n')
+            time.sleep(0.05)
+        except Exception as e:
+            print(f'[VideoStream] Error: {e}')
+            time.sleep(0.05)
 
 
 @app.route('/')
@@ -61,8 +146,7 @@ def index():
 
 @app.route('/video')
 def video():
-    return Response(generate_frames(),
-                    mimetype='multipart/x-mixed-replace; boundary=frame')
+    return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 
 @app.route('/status')
@@ -115,7 +199,7 @@ def main():
     stop_event.clear()
     threading.Thread(
         target=agent.main,
-        args=(camera, wheels, leds, stop_event),
+        args=(camera, wheels, leds, stop_event, _frame_queue, _debug_info_lock, _debug_info),
         daemon=True,
         name='AgentThread',
     ).start()

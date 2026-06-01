@@ -338,10 +338,28 @@ def package_task(task_name):
     task_models_dir = os.path.join(PROJECT_ROOT, 'tasks', task_name, 'models')
     task_server_dir = os.path.join(PROJECT_ROOT, 'servers', task_name)
 
+    # Define dependencies for tasks that import from other tasks
+    task_dependencies = {
+        'project': ['object_detection', 'visual_lane_servoing'],
+    }
+
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode='w:gz') as tar:
         print(f"   Adding packages: tasks/{task_name}/packages/")
         tar.add(task_packages_dir, arcname=f'tasks/{task_name}/packages', filter=no_pycache)
+
+        # Add dependency task packages
+        if task_name in task_dependencies:
+            for dep_task in task_dependencies[task_name]:
+                dep_packages_dir = os.path.join(PROJECT_ROOT, 'tasks', dep_task, 'packages')
+                if os.path.exists(dep_packages_dir):
+                    print(f"   Adding dependency: tasks/{dep_task}/packages/")
+                    tar.add(dep_packages_dir, arcname=f'tasks/{dep_task}/packages', filter=no_pycache)
+                dep_models_dir = os.path.join(PROJECT_ROOT, 'tasks', dep_task, 'models')
+                if os.path.exists(dep_models_dir):
+                    print(f"   Adding dependency models: tasks/{dep_task}/models/")
+                    tar.add(dep_models_dir, arcname=f'tasks/{dep_task}/models', filter=no_pycache)
+
         if os.path.exists(config_dir):
             print(f"   Adding configs: config/")
             tar.add(config_dir, arcname='config', filter=no_pycache)

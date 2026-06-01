@@ -20,7 +20,7 @@ def _load_cfg() -> dict:
         return {}
 
 
-def main(camera, wheels, leds, stop_event):
+def main(camera, wheels, leds, stop_event, frame_queue=None, debug_lock=None, debug_dict=None):
     cfg = _load_cfg()
     perception = Perception()
     fsm = ConvoyFSM(cfg)
@@ -28,17 +28,53 @@ def main(camera, wheels, leds, stop_event):
     last_state = None
     last_hw_warn = 0.0
     last_dbg = 0.0
+    last_fps_update = 0.0
+    frame_count = 0
+    fps = 0.0
+
     try:
         while not stop_event.is_set():
+            loop_start = time.monotonic()
             ok, frame = camera.read()
             if not ok:
                 time.sleep(0.02)
                 continue
 
+            # Share frame with visualizer
+            if frame_queue is not None:
+                try:
+                    # Non-blocking put - drop if queue is full
+                    frame_queue.put_nowait(frame.copy())
+                except:
+                    pass
+
             now = time.monotonic()
             wm = perception.update(frame, now)
             decision = fsm.step(wm)
             left, right = motors_from_decision(decision)
+
+            # Calculate FPS
+            frame_count += 1
+            if now - last_fps_update > 1.0:
+                fps = frame_count / (now - last_fps_update)
+                frame_count = 0
+                last_fps_update = now
+
+            # Update shared debug info for visualization
+            if debug_lock is not None and debug_dict is not None:
+                dbg = perception.last_debug_info
+                with debug_lock:
+                    debug_dict.update({
+                        'state': decision.state_name,
+                        'base_speed': decision.base_speed,
+                        'steering': decision.steering,
+                        'left_speed': left,
+                        'right_speed': right,
+                        'leader_source': dbg.get('leader_source'),
+                        'led_pair_px': dbg.get('led_pair_px'),
+                        'apriltag_ids': dbg.get('apriltag_ids', []),
+                        'fps': fps,
+                    })
 
             if now - last_dbg > 0.5:
                 dbg = perception.last_debug_info
