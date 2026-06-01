@@ -135,7 +135,7 @@ class ConvoyFSM:
         )
 
     def _make_follow(self, speed: float, steering: float) -> Decision:
-        leds = {0: _GREEN, 2: _GREEN, 3: _GREEN, 4: _GREEN}
+        leds = {0: _OFF, 2: _OFF, 3: _OFF, 4: _OFF}
         # Override rear indices with red as the "leader locked" rear signal.
         for idx in self.rear_led_indices:
             leds[int(idx)] = _RED
