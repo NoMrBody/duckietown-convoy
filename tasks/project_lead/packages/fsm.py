@@ -55,6 +55,14 @@ class LeadFSM:
         self.slow_after_turn_s = float(cfg.get("slow_after_turn_s", 2.0))
         self.slow_after_factor = float(cfg.get("slow_after_factor", 0.6))
 
+        # Closed-loop odometry maneuver targets (used only when the agent passes
+        # encoder distance/yaw; otherwise the timed values above are the fallback).
+        self.cross_distance_m = float(cfg.get("cross_distance_m", 0.35))
+        self.heading_kp       = float(cfg.get("maneuver_heading_kp", 0.6))
+        self.turn_kp          = float(cfg.get("turn_kp", 0.8))
+        self.cross_dist_tol_m = float(cfg.get("cross_dist_tol_m", 0.03))
+        self.turn_yaw_tol_rad = float(cfg.get("turn_yaw_tol_rad", 0.08))
+
         # Red-line intersection firing gates + clear latch
         self.fire_dist   = float(cfg.get("stopline_fire_dist", 0.45))
         self.fire_width  = float(cfg.get("stopline_fire_width", 0.40))
@@ -79,7 +87,8 @@ class LeadFSM:
         self.last_step: Optional[str] = None
 
     # --- public ---------------------------------------------------------------
-    def step(self, wm: WorldModel, turn_yaw_rad: Optional[float] = None) -> Decision:
+    def step(self, wm: WorldModel, turn_yaw_rad: Optional[float] = None,
+             fwd_dist_m: Optional[float] = None) -> Decision:
         self.request_lane_reset = False
         t = wm.t
         self._update_latch(wm)
@@ -90,7 +99,7 @@ class LeadFSM:
 
         # 1) an active maneuver takes precedence
         if self._maneuver is not None:
-            return self._run_maneuver(wm, t, turn_yaw_rad)
+            return self._run_maneuver(wm, t, turn_yaw_rad, fwd_dist_m)
 
         # 2) halting at the line for a pending STOP
         if t < self._stop_until:
@@ -101,7 +110,7 @@ class LeadFSM:
             self._begin_step(step, t)
             if self._done:
                 return self._decide(STATE_DONE, 0.0, 0.0, RED)
-            return self._run_maneuver(wm, t, turn_yaw_rad)
+            return self._run_maneuver(wm, t, turn_yaw_rad, fwd_dist_m)
 
         # 3) slow-after-turn window (give the follower time to reacquire)
         if t < self._slow_after_until:
@@ -123,7 +132,7 @@ class LeadFSM:
             self._begin_step(step, t)
             if self._done:
                 return self._decide(STATE_DONE, 0.0, 0.0, RED)
-            return self._run_maneuver(wm, t, turn_yaw_rad)
+            return self._run_maneuver(wm, t, turn_yaw_rad, fwd_dist_m)
 
         # 5) slow zone (timed)
         if t < self._slow_until:
@@ -145,9 +154,17 @@ class LeadFSM:
     def _update_latch(self, wm: WorldModel) -> None:
         rl = wm.red_line
         red_present = rl is not None and rl.present and rl.width_frac >= (self.fire_width * 0.5)
+        # Only count "line cleared" frames once we've finished reacting to the
+        # last intersection. While a maneuver / stop / slow-after is in progress
+        # the bot is still on top of the same physical line; counting clear
+        # frames here would re-arm _consumed mid-reaction and let that one line
+        # re-fire, burning the whole route down to the terminal 'stop'.
+        busy = (self._maneuver is not None
+                or wm.t < self._slow_after_until
+                or wm.t < self._stop_until)
         if red_present:
             self._red_clear = 0
-        else:
+        elif not busy:
             self._red_clear += 1
             if self._consumed and self._red_clear >= self.clear_frames:
                 self._consumed = False  # cleared the line -> ready for next intersection
@@ -166,16 +183,27 @@ class LeadFSM:
         self._maneuver = step if step in _MANEUVER_STEPS else "straight"
         self._maneuver_start = t
 
-    def _run_maneuver(self, wm: WorldModel, t: float, turn_yaw_rad: Optional[float]) -> Decision:
+    def _run_maneuver(self, wm: WorldModel, t: float,
+                      turn_yaw_rad: Optional[float],
+                      fwd_dist_m: Optional[float]) -> Decision:
         step = self._maneuver
         elapsed = t - self._maneuver_start
         is_turn = step in _TURN_STEPS
         min_s = self.min_turn_s if is_turn else self.min_cross_s
         max_s = self.max_turn_s if is_turn else self.max_cross_s
 
+        # Closed-loop on encoder odometry when both scalars are available;
+        # otherwise fall back to the legacy timed / lane-reacquire behaviour.
+        have_odo = turn_yaw_rad is not None and fwd_dist_m is not None
+
         done = False
-        if elapsed >= max_s:                                   # hard timeout
+        if elapsed >= max_s:                                   # hard safety timeout
             done = True
+        elif have_odo:
+            if is_turn and abs(turn_yaw_rad) >= (self.turn_yaw_target - self.turn_yaw_tol_rad):
+                done = True                                    # turned to target heading
+            elif (not is_turn) and fwd_dist_m >= (self.cross_distance_m - self.cross_dist_tol_m):
+                done = True                                    # crossed the target distance
         elif is_turn and turn_yaw_rad is not None and abs(turn_yaw_rad) >= self.turn_yaw_target:
             done = True                                        # encoder yaw target reached
         elif elapsed >= min_s and wm.lane.healthy:
@@ -188,12 +216,27 @@ class LeadFSM:
             return self._decide(STATE_SLOW_AFTER, self.cruise_speed * self.slow_after_factor,
                                 wm.lane.steering_suggestion, YELLOW)
 
-        if step == "right":
-            # Lane convention: NEGATIVE steering turns right (left wheel faster).
-            return self._decide(STATE_TURN_R, self.turn_base, -self.turn_steer, WHITE)
-        if step == "left":
-            return self._decide(STATE_TURN_L, self.turn_base, +self.turn_steer, WHITE)
-        return self._decide(STATE_CROSS, self.cross_base, 0.0, WHITE)
+        if is_turn:
+            # Lane convention: +steer turns LEFT, -steer turns RIGHT.
+            sign = 1.0 if step == "left" else -1.0
+            if have_odo and self.turn_yaw_target > 0:
+                # Taper steer as the remaining yaw error shrinks, with a floor so
+                # the bot keeps rotating until it reaches the target heading.
+                yaw_err = self.turn_yaw_target - abs(turn_yaw_rad)
+                mag = clamp(self.turn_steer * self.turn_kp * yaw_err / self.turn_yaw_target,
+                            0.10, self.turn_steer)
+                steer = sign * mag
+            else:
+                steer = sign * self.turn_steer                 # legacy fixed arc
+            name = STATE_TURN_L if step == "left" else STATE_TURN_R
+            return self._decide(name, self.turn_base, steer, WHITE)
+
+        # Straight cross: hold heading with a small P term on yaw drift.
+        # yaw > 0 means drifting left -> negative steer corrects back right.
+        steer = 0.0
+        if have_odo:
+            steer = clamp(-self.heading_kp * turn_yaw_rad, -self.turn_steer, self.turn_steer)
+        return self._decide(STATE_CROSS, self.cross_base, steer, WHITE)
 
     @staticmethod
     def _decide(name: str, speed: float, steering: float, color) -> Decision:

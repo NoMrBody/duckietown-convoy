@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 
 from tasks.project_lead.packages.fsm import (  # noqa: E402
     LeadFSM, STATE_LANE, STATE_STOP, STATE_TURN_R, STATE_TURN_L, STATE_SLOW_AFTER,
-    STATE_DONE, STATE_SLOW,
+    STATE_DONE, STATE_SLOW, STATE_CROSS,
 )
 from tasks.project.packages.world_model import LaneObs, RedLineObs, SignObs, WorldModel  # noqa: E402
 
@@ -118,6 +118,98 @@ def test_no_fire_until_line_clears():
     # red still present next frame: must not advance again
     fsm.step(_wm(0.25, red=_red(), lane_healthy=False))
     assert fsm.route_idx == idx_after_first
+
+
+def test_one_line_does_not_burn_route_during_maneuver():
+    # Regression for the route-burn latch bug: a single physical red line that
+    # flickers out of view DURING the turn / slow-after window must not re-arm
+    # the latch and consume extra route steps (which would reach terminal 'stop').
+    fsm = LeadFSM(_cfg(route=["right", "straight", "stop"], stopline_clear_frames=2,
+                       min_turn_s=0.8, slow_after_turn_s=2.0))
+
+    # First (and only physical) intersection: fire -> right turn.
+    fsm.step(_wm(0.2, red=_red(), lane_healthy=False))
+    assert fsm.route_idx == 1
+
+    # Turn completes once the lane is reacquired -> SLOW_AFTER window opens.
+    assert fsm.step(_wm(1.1, lane_healthy=True)).state_name == STATE_SLOW_AFTER
+
+    # The SAME line drops out of the band for >= clear_frames during slow-after.
+    fsm.step(_wm(1.5, red=_red(present=False), lane_healthy=True))
+    fsm.step(_wm(1.9, red=_red(present=False), lane_healthy=True))
+
+    # Slow-after ends with the same line back in view: must NOT advance again.
+    fsm.step(_wm(3.5, red=_red(), lane_healthy=True))
+    assert fsm.route_idx == 1, "single red line re-fired and burned the route"
+
+
+def test_cross_exits_on_distance():
+    # Closed-loop straight cross exits when the encoder distance reaches target,
+    # well before the max_cross_s safety timeout.
+    fsm = LeadFSM(_cfg(route=["straight", "stop"], cross_distance_m=0.35, max_cross_s=99.0))
+    d = fsm.step(_wm(0.2, red=_red(), lane_healthy=False), turn_yaw_rad=0.0, fwd_dist_m=0.0)
+    assert d.state_name == STATE_CROSS
+    d = fsm.step(_wm(0.4, lane_healthy=False), turn_yaw_rad=0.0, fwd_dist_m=0.20)
+    assert d.state_name == STATE_CROSS                       # not yet at target
+    d = fsm.step(_wm(0.6, lane_healthy=False), turn_yaw_rad=0.0, fwd_dist_m=0.35)
+    assert d.state_name == STATE_SLOW_AFTER                  # distance reached -> exit
+
+
+def test_cross_holds_heading_sign():
+    # Heading-hold during a cross must steer AGAINST the drift (control.py sign).
+    fsm = LeadFSM(_cfg(route=["straight", "stop"], cross_distance_m=1.0, max_cross_s=99.0))
+    fsm.step(_wm(0.2, red=_red(), lane_healthy=False), turn_yaw_rad=0.0, fwd_dist_m=0.0)
+    d = fsm.step(_wm(0.4, lane_healthy=False), turn_yaw_rad=0.5, fwd_dist_m=0.1)
+    assert d.state_name == STATE_CROSS and d.steering < 0.0  # drifting left -> steer right
+
+    fsm2 = LeadFSM(_cfg(route=["straight", "stop"], cross_distance_m=1.0, max_cross_s=99.0))
+    fsm2.step(_wm(0.2, red=_red(), lane_healthy=False), turn_yaw_rad=0.0, fwd_dist_m=0.0)
+    d = fsm2.step(_wm(0.4, lane_healthy=False), turn_yaw_rad=-0.5, fwd_dist_m=0.1)
+    assert d.state_name == STATE_CROSS and d.steering > 0.0  # drifting right -> steer left
+
+
+def test_turn_exits_on_yaw_target():
+    # Right turn: yaw goes negative; exits when |yaw| reaches the heading target.
+    fsm = LeadFSM(_cfg(route=["right", "stop"], turn_yaw_target_rad=1.40, max_turn_s=99.0))
+    d = fsm.step(_wm(0.2, red=_red(), lane_healthy=False), turn_yaw_rad=0.0, fwd_dist_m=0.0)
+    assert d.state_name == STATE_TURN_R and d.steering < 0.0
+    d = fsm.step(_wm(0.5, lane_healthy=False), turn_yaw_rad=-0.7, fwd_dist_m=0.0)
+    assert d.state_name == STATE_TURN_R                      # not yet at target
+    d = fsm.step(_wm(0.8, lane_healthy=False), turn_yaw_rad=-1.4, fwd_dist_m=0.0)
+    assert d.state_name == STATE_SLOW_AFTER                  # heading reached -> exit
+
+    left = LeadFSM(_cfg(route=["left", "stop"], turn_yaw_target_rad=1.40, max_turn_s=99.0))
+    d = left.step(_wm(0.2, red=_red(), lane_healthy=False), turn_yaw_rad=0.0, fwd_dist_m=0.0)
+    assert d.state_name == STATE_TURN_L and d.steering > 0.0
+
+
+def test_turn_p_control_tapers():
+    # The turn steer tapers as the remaining yaw error shrinks, with a floor.
+    fsm = LeadFSM(_cfg(route=["left", "stop"], turn_yaw_target_rad=1.40, max_turn_s=99.0,
+                       turn_steer=0.25, turn_kp=0.8))
+    fsm.step(_wm(0.2, red=_red(), lane_healthy=False), turn_yaw_rad=0.0, fwd_dist_m=0.0)
+    s_early = fsm.step(_wm(0.4, lane_healthy=False), turn_yaw_rad=0.3, fwd_dist_m=0.0).steering
+    s_late  = fsm.step(_wm(0.6, lane_healthy=False), turn_yaw_rad=1.2, fwd_dist_m=0.0).steering
+    assert abs(s_late) < abs(s_early)                        # tapers toward target
+    assert abs(s_late) >= 0.10 - 1e-9                        # never below the floor
+
+
+def test_no_odometry_falls_back_to_timed():
+    # With no encoder scalars, behaviour is the legacy timed / lane-reacquire path.
+    fsm = LeadFSM(_cfg(route=["straight", "stop"], min_cross_s=0.4, max_cross_s=3.0))
+    assert fsm.step(_wm(0.2, red=_red(), lane_healthy=False)).state_name == STATE_CROSS
+    assert fsm.step(_wm(0.5, lane_healthy=True)).state_name == STATE_CROSS      # before min_cross_s
+    assert fsm.step(_wm(0.7, lane_healthy=True)).state_name == STATE_SLOW_AFTER  # lane reacquired
+
+
+def test_max_timeout_overrides_odometry():
+    # Even with no forward progress, the cross exits at the max_cross_s safety net.
+    fsm = LeadFSM(_cfg(route=["straight", "stop"], cross_distance_m=99.0, max_cross_s=1.0))
+    fsm.step(_wm(0.2, red=_red(), lane_healthy=False), turn_yaw_rad=0.0, fwd_dist_m=0.0)
+    assert fsm.step(_wm(0.5, lane_healthy=False),
+                    turn_yaw_rad=0.0, fwd_dist_m=0.0).state_name == STATE_CROSS
+    assert fsm.step(_wm(1.3, lane_healthy=False),
+                    turn_yaw_rad=0.0, fwd_dist_m=0.0).state_name == STATE_SLOW_AFTER
 
 
 def _run():

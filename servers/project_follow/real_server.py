@@ -46,6 +46,73 @@ _frame_queue = queue.Queue(maxsize=2)
 _debug_info_lock = threading.Lock()
 _debug_info = {}
 
+# Display stream: downscale + lower JPEG quality so frames are ~4x smaller over
+# wifi (cuts latency), and always send the freshest frame (drain the queue).
+_STREAM_SIZE = (480, 360)   # (width, height) of the streamed image
+_STREAM_QUALITY = 45        # JPEG quality [0..100] for the stream
+
+# Optional 2x2 debug montage: annotated camera + yellow / white lane masks and
+# the circle-grid leader detection, so HSV / grid tuning can be done from the
+# browser. Each panel is _PANEL_SIZE, giving a 640x480 montage. Falls back to
+# the plain feed if the vision modules can't be imported. NOTE: lane masks
+# reflect the HSV config loaded at startup — redeploy to pick up edits.
+_SHOW_MASKS = True
+_PANEL_SIZE = (320, 240)    # (w, h) per panel
+try:
+    import yaml
+    from tasks.visual_lane_servoing.packages.visual_servoing_activity import detect_lane_markings
+    from tasks.project.packages.marker_grid import MarkerGridTracker
+    _follow_cfg_file = os.path.normpath(os.path.join(
+        os.path.dirname(__file__), "..", "..", "config", "project_follow_config.yaml"))
+    try:
+        with open(_follow_cfg_file) as _cf:
+            _follow_cfg = yaml.safe_load(_cf) or {}
+    except Exception:
+        _follow_cfg = {}
+    _grid_tracker = MarkerGridTracker(cfg=_follow_cfg)
+    _MASKS_AVAILABLE = True
+except Exception as _mask_err:
+    print(f"[follow] mask preview disabled: {_mask_err}")
+    _MASKS_AVAILABLE = False
+
+
+def _mask_to_bgr(mask, color, label):
+    out = np.zeros((mask.shape[0], mask.shape[1], 3), dtype=np.uint8)
+    out[mask > 0] = color
+    cv2.putText(out, label, (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+    return out
+
+
+def _grid_panel(panel):
+    vis = panel.copy()
+    try:
+        obs = _grid_tracker.update(panel)
+        if obs is not None:
+            x1, y1, x2, y2 = obs.bbox
+            cv2.rectangle(vis, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
+            cx, cy = obs.midpoint
+            cv2.circle(vis, (int(cx), int(cy)), 4, (0, 0, 255), -1)
+    except Exception:
+        pass
+    cv2.putText(vis, "GRID (leader)", (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+    return vis
+
+
+def _montage(frame_bgr):
+    panel = cv2.resize(frame_bgr, _PANEL_SIZE, interpolation=cv2.INTER_AREA)
+    cam = visualize(panel)
+    z = np.zeros((_PANEL_SIZE[1], _PANEL_SIZE[0]), dtype=np.uint8)
+    try:
+        m_yellow, m_white = detect_lane_markings(panel)
+    except Exception:
+        m_yellow = m_white = z
+    yellow = _mask_to_bgr(m_yellow, (0, 255, 255), "YELLOW centerline")
+    white  = _mask_to_bgr(m_white,  (255, 255, 255), "WHITE edge")
+    grid   = _grid_panel(panel)
+    top    = cv2.hconcat([cam, yellow])
+    bottom = cv2.hconcat([white, grid])
+    return cv2.vconcat([top, bottom])
+
 
 def visualize(frame_bgr):
     if frame_bgr is None:
@@ -86,17 +153,26 @@ def generate_frames():
     while True:
         try:
             frame = _frame_queue.get(timeout=0.5)
-            display = visualize(frame)
-            ret, jpeg = cv2.imencode('.jpg', display, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            # Drain to the freshest queued frame so the stream never lags behind.
+            while True:
+                try:
+                    frame = _frame_queue.get_nowait()
+                except queue.Empty:
+                    break
+            if _SHOW_MASKS and _MASKS_AVAILABLE:
+                display = _montage(frame)
+            else:
+                display = visualize(cv2.resize(frame, _STREAM_SIZE, interpolation=cv2.INTER_AREA))
+            ret, jpeg = cv2.imencode('.jpg', display, [cv2.IMWRITE_JPEG_QUALITY, _STREAM_QUALITY])
             if not ret:
                 continue
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
         except queue.Empty:
-            blank = np.zeros((480, 640, 3), dtype=np.uint8)
-            cv2.putText(blank, "Waiting for frames...", (160, 240),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (80, 80, 80), 2)
-            ret, jpeg = cv2.imencode('.jpg', blank, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            blank = np.zeros((_STREAM_SIZE[1], _STREAM_SIZE[0], 3), dtype=np.uint8)
+            cv2.putText(blank, "Waiting for frames...", (110, _STREAM_SIZE[1] // 2),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (80, 80, 80), 2)
+            ret, jpeg = cv2.imencode('.jpg', blank, [cv2.IMWRITE_JPEG_QUALITY, _STREAM_QUALITY])
             if ret:
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
