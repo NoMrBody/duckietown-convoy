@@ -55,18 +55,22 @@ def main(camera, wheels, leds, stop_event,
             now = time.monotonic()
             wm = perception.update(frame, now)
 
-            # Encoder-derived yaw closes the loop on turns when available; None
+            # Encoder odometry closes the loop on maneuvers when available: yaw
+            # for turns, forward distance for straight crosses. None on either
             # falls back to lane-reacquisition + timeout inside the FSM.
             turn_yaw = None
+            fwd_dist = None
             if encoders is not None and in_maneuver:
                 try:
                     dl = encoders.left.distance_m()
                     dr = encoders.right.distance_m()
                     turn_yaw = (dr - dl) / max(baseline, 1e-3)
+                    fwd_dist = 0.5 * (dl + dr)
                 except Exception:
                     turn_yaw = None
+                    fwd_dist = None
 
-            decision = fsm.step(wm, turn_yaw_rad=turn_yaw)
+            decision = fsm.step(wm, turn_yaw_rad=turn_yaw, fwd_dist_m=fwd_dist)
             if fsm.request_lane_reset:
                 perception.reset_lane()
 
