@@ -46,6 +46,11 @@ _frame_queue = queue.Queue(maxsize=2)
 _debug_info_lock = threading.Lock()
 _debug_info = {}
 
+# Display stream: downscale + lower JPEG quality so frames are ~4x smaller over
+# wifi (cuts latency), and always send the freshest frame (drain the queue).
+_STREAM_SIZE = (480, 360)   # (width, height) of the streamed image
+_STREAM_QUALITY = 45        # JPEG quality [0..100] for the stream
+
 
 def visualize(frame_bgr):
     if frame_bgr is None:
@@ -86,17 +91,24 @@ def generate_frames():
     while True:
         try:
             frame = _frame_queue.get(timeout=0.5)
-            display = visualize(frame)
-            ret, jpeg = cv2.imencode('.jpg', display, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            # Drain to the freshest queued frame so the stream never lags behind.
+            while True:
+                try:
+                    frame = _frame_queue.get_nowait()
+                except queue.Empty:
+                    break
+            small = cv2.resize(frame, _STREAM_SIZE, interpolation=cv2.INTER_AREA)
+            display = visualize(small)
+            ret, jpeg = cv2.imencode('.jpg', display, [cv2.IMWRITE_JPEG_QUALITY, _STREAM_QUALITY])
             if not ret:
                 continue
             yield (b'--frame\r\n'
                    b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
         except queue.Empty:
-            blank = np.zeros((480, 640, 3), dtype=np.uint8)
-            cv2.putText(blank, "Waiting for frames...", (160, 240),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.8, (80, 80, 80), 2)
-            ret, jpeg = cv2.imencode('.jpg', blank, [cv2.IMWRITE_JPEG_QUALITY, 70])
+            blank = np.zeros((_STREAM_SIZE[1], _STREAM_SIZE[0], 3), dtype=np.uint8)
+            cv2.putText(blank, "Waiting for frames...", (110, _STREAM_SIZE[1] // 2),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.7, (80, 80, 80), 2)
+            ret, jpeg = cv2.imencode('.jpg', blank, [cv2.IMWRITE_JPEG_QUALITY, _STREAM_QUALITY])
             if ret:
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
