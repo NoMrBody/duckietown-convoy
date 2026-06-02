@@ -19,9 +19,9 @@ slow_cooldown: 3.0
 route: [straight, right, straight, left, stop]
 
 # --- maneuver shape / timing (FIELD-TUNE) ---
-turn_base_speed:    0.25    # forward speed during a turn arc
+turn_base_speed:    0.30    # forward speed during a turn arc
 turn_steer:         0.25    # steer magnitude during a turn (clamped to base by control)
-cross_base_speed:   0.25    # forward speed crossing straight through an intersection
+cross_base_speed:   0.30    # forward speed crossing straight through an intersection
 min_turn_s:         0.8     # don't accept lane-reacquire exit before this
 max_turn_s:         3.0     # hard timeout for a turn
 min_cross_s:        0.4
@@ -49,6 +49,6 @@ lane_healthy_min_pixels: 500
 # --- AprilTag traffic signs (Duckietown standard; cv2.aruco) ---
 # Run the lead and read the printed "tags=[...]" to discover IDs, then fill in.
 apriltag_family:    tag36h11   # tag36h11 | tag36h10 | tag25h9 | tag16h5
-apriltag_stop_ids:  []         # tag IDs that mean STOP
-apriltag_slow_ids:  []         # tag IDs that mean SLOW
+apriltag_stop_ids:  [25]       # tag IDs that mean STOP
+apriltag_slow_ids:  [26]       # tag IDs that mean SLOW
 apriltag_min_area_px: 400      # ignore far-away tags so signs don't arm too early

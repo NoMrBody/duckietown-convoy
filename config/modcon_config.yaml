@@ -1,7 +1,7 @@
 baseline: 0.1
 radius: 0.0318
 k: 27.0
-gain: 0.5
+gain: 1.0
 trim: 0
 power_limit: 0.85
 v_max: 1.0
