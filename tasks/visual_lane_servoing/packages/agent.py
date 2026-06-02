@@ -119,8 +119,12 @@ class LaneServoingAgent:
     def _calculate_steering(self, error: float, dt: float) -> float:
         # Normalize the derivative term by elapsed time so the D-gain behaves
         # the same regardless of frame rate (sim vs. real robot can differ).
-        dt = max(dt, 1e-3)
+        # Clamp dt to a sane band so a slow/duplicated frame can't blow up the
+        # rate factor, then cap the per-frame derivative kick. Without this a
+        # single jittery frame injects a large steering spike -> weaving.
+        dt = min(max(dt, 1.0 / 60.0), 1.0 / 10.0)
         error_diff       = (error - self._prev_error) * (_REFERENCE_DT / dt)
+        error_diff       = float(np.clip(error_diff, -0.3, 0.3))
         self._prev_error = error
         steering = self.p_gain * error + self.d_gain * error_diff
         return float(np.clip(steering, -self.max_steer, self.max_steer))
@@ -149,10 +153,9 @@ class LaneServoingAgent:
         return float(np.clip(left, 0.0, 1.0)), float(np.clip(right, 0.0, 1.0))
 
     def _smooth(self, left, right, both_visible):
-        buf = 2 if both_visible else 1
-        if self._left_history.maxlen != buf:
-            self._left_history  = deque(maxlen=buf)
-            self._right_history = deque(maxlen=buf)
+        # Fixed-length moving average. Do NOT resize the buffer on both_visible
+        # flicker: rebuilding it discards history and injects step jumps exactly
+        # when the command is noisiest (a weave source on dashed lanes).
         self._left_history.append(left)
         self._right_history.append(right)
         return (sum(self._left_history)  / len(self._left_history),
