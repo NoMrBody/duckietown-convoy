@@ -145,9 +145,17 @@ class LeadFSM:
     def _update_latch(self, wm: WorldModel) -> None:
         rl = wm.red_line
         red_present = rl is not None and rl.present and rl.width_frac >= (self.fire_width * 0.5)
+        # Only count "line cleared" frames once we've finished reacting to the
+        # last intersection. While a maneuver / stop / slow-after is in progress
+        # the bot is still on top of the same physical line; counting clear
+        # frames here would re-arm _consumed mid-reaction and let that one line
+        # re-fire, burning the whole route down to the terminal 'stop'.
+        busy = (self._maneuver is not None
+                or wm.t < self._slow_after_until
+                or wm.t < self._stop_until)
         if red_present:
             self._red_clear = 0
-        else:
+        elif not busy:
             self._red_clear += 1
             if self._consumed and self._red_clear >= self.clear_frames:
                 self._consumed = False  # cleared the line -> ready for next intersection

@@ -120,6 +120,29 @@ def test_no_fire_until_line_clears():
     assert fsm.route_idx == idx_after_first
 
 
+def test_one_line_does_not_burn_route_during_maneuver():
+    # Regression for the route-burn latch bug: a single physical red line that
+    # flickers out of view DURING the turn / slow-after window must not re-arm
+    # the latch and consume extra route steps (which would reach terminal 'stop').
+    fsm = LeadFSM(_cfg(route=["right", "straight", "stop"], stopline_clear_frames=2,
+                       min_turn_s=0.8, slow_after_turn_s=2.0))
+
+    # First (and only physical) intersection: fire -> right turn.
+    fsm.step(_wm(0.2, red=_red(), lane_healthy=False))
+    assert fsm.route_idx == 1
+
+    # Turn completes once the lane is reacquired -> SLOW_AFTER window opens.
+    assert fsm.step(_wm(1.1, lane_healthy=True)).state_name == STATE_SLOW_AFTER
+
+    # The SAME line drops out of the band for >= clear_frames during slow-after.
+    fsm.step(_wm(1.5, red=_red(present=False), lane_healthy=True))
+    fsm.step(_wm(1.9, red=_red(present=False), lane_healthy=True))
+
+    # Slow-after ends with the same line back in view: must NOT advance again.
+    fsm.step(_wm(3.5, red=_red(), lane_healthy=True))
+    assert fsm.route_idx == 1, "single red line re-fired and burned the route"
+
+
 def _run():
     fns = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for fn in fns:
