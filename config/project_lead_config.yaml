@@ -52,3 +52,4 @@ apriltag_family:    tag36h11   # tag36h11 | tag36h10 | tag25h9 | tag16h5
 apriltag_stop_ids:  [25]       # tag IDs that mean STOP
 apriltag_slow_ids:  [26]       # tag IDs that mean SLOW
 apriltag_min_area_px: 400      # ignore far-away tags so signs don't arm too early
+
