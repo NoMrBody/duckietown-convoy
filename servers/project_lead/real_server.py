@@ -52,6 +52,49 @@ _debug_info = {}
 _STREAM_SIZE = (480, 360)   # (width, height) of the streamed image
 _STREAM_QUALITY = 45        # JPEG quality [0..100] for the stream
 
+# Optional 2x2 debug montage: annotated camera + yellow / white / red masks, so
+# HSV tuning can be done from the browser. Each panel is _PANEL_SIZE, giving a
+# 640x480 montage. Falls back to the plain feed if the vision modules can't be
+# imported. NOTE: masks reflect the HSV config loaded at startup — redeploy to
+# pick up edits to lane_servoing_hsv_config.yaml.
+_SHOW_MASKS = True
+_PANEL_SIZE = (320, 240)    # (w, h) per panel
+try:
+    from tasks.visual_lane_servoing.packages.visual_servoing_activity import detect_lane_markings
+    from tasks.project.packages.red_line import RedLineDetector
+    _red_detector = RedLineDetector()
+    _MASKS_AVAILABLE = True
+except Exception as _mask_err:
+    print(f"[lead] mask preview disabled: {_mask_err}")
+    _MASKS_AVAILABLE = False
+
+
+def _mask_to_bgr(mask, color, label):
+    out = np.zeros((mask.shape[0], mask.shape[1], 3), dtype=np.uint8)
+    out[mask > 0] = color
+    cv2.putText(out, label, (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+    return out
+
+
+def _montage(frame_bgr):
+    panel = cv2.resize(frame_bgr, _PANEL_SIZE, interpolation=cv2.INTER_AREA)
+    cam = visualize(panel)
+    z = np.zeros((_PANEL_SIZE[1], _PANEL_SIZE[0]), dtype=np.uint8)
+    try:
+        m_yellow, m_white = detect_lane_markings(panel)
+    except Exception:
+        m_yellow = m_white = z
+    try:
+        m_red = (_red_detector._red_mask(panel) > 0).astype(np.uint8)
+    except Exception:
+        m_red = z
+    yellow = _mask_to_bgr(m_yellow, (0, 255, 255), "YELLOW centerline")
+    white  = _mask_to_bgr(m_white,  (255, 255, 255), "WHITE edge")
+    red    = _mask_to_bgr(m_red,    (0, 0, 255),     "RED stop-line")
+    top    = cv2.hconcat([cam, yellow])
+    bottom = cv2.hconcat([white, red])
+    return cv2.vconcat([top, bottom])
+
 
 def visualize(frame_bgr):
     if frame_bgr is None:
@@ -96,8 +139,10 @@ def generate_frames():
                     frame = _frame_queue.get_nowait()
                 except queue.Empty:
                     break
-            small = cv2.resize(frame, _STREAM_SIZE, interpolation=cv2.INTER_AREA)
-            display = visualize(small)
+            if _SHOW_MASKS and _MASKS_AVAILABLE:
+                display = _montage(frame)
+            else:
+                display = visualize(cv2.resize(frame, _STREAM_SIZE, interpolation=cv2.INTER_AREA))
             ret, jpeg = cv2.imencode('.jpg', display, [cv2.IMWRITE_JPEG_QUALITY, _STREAM_QUALITY])
             if not ret:
                 continue
