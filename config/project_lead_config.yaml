@@ -16,14 +16,16 @@ slow_cooldown: 3.0
 # --- fixed route ---
 # Steps consumed one-per-intersection (each red-line event). Tokens:
 #   straight | right | left | stop   (stop = final, latched halt)
-route: [straight, right, straight, left, stop]
+route: [straight, straight, straight, left, right]
 
 # --- maneuver shape / timing (FIELD-TUNE) ---
 turn_base_speed:    0.30    # forward speed during a turn arc
 turn_steer:         0.25    # steer magnitude during a turn (clamped to base by control)
+left_widen:         0.70    # left turns sweep wider: left steer law = turn_steer * this (1.0 = symmetric)
+left_base_factor:   1.00    # optional: scale forward speed during a left turn (>1 widens further)
 cross_base_speed:   0.30    # forward speed crossing straight through an intersection
 min_turn_s:         0.8     # don't accept lane-reacquire exit before this
-max_turn_s:         3.0     # hard timeout for a turn
+max_turn_s:         4.0     # hard timeout for a turn (raised from 3.0: a wider left turn needs more time)
 min_cross_s:        0.4
 max_cross_s:        2.0
 turn_yaw_target_rad: 1.40   # ~80 deg; encoder-yaw early exit (used only if encoders present)
@@ -54,9 +56,17 @@ stopline_min_area_px:    250
 lane_healthy_min_pixels: 500
 
 # --- AprilTag traffic signs (Duckietown standard; cv2.aruco) ---
-# Run the lead and read the printed "tags=[...]" to discover IDs, then fill in.
+# IDs MUST match your physical tags. Read them from the printed "tags=[...]"
+# (bot /status or /video page) or run: python scripts/decode_apriltag.py <photo>
+# NOTE: 25 and 26 are BOTH STOP-category IDs in Duckietown's apriltagsDB, so the
+# defaults below are placeholders -- verify and set your real STOP vs SLOW IDs.
+# (cv2.aruco needs opencv-contrib-python on the bot, else detection is disabled.)
 apriltag_family:    tag36h11   # tag36h11 | tag36h10 | tag25h9 | tag16h5
-apriltag_stop_ids:  [25]       # tag IDs that mean STOP
-apriltag_slow_ids:  [26]       # tag IDs that mean SLOW
-apriltag_min_area_px: 400      # ignore far-away tags so signs don't arm too early
+apriltag_stop_ids:  [25]       # tag IDs that mean STOP  (VERIFY against your signs)
+apriltag_slow_ids:  [26]       # tag IDs that mean SLOW  (VERIFY against your signs)
+apriltag_min_area_px: 0        # was 400; 0 = remember any decoded tag (near-gate below halts)
+
+# A near STOP tag halts the bot directly (independent of the intersection red line).
+stop_tag_near_area_frac: 0.04  # halt when STOP bbox >= this fraction of the frame; tune from printed bbox
+stop_tag_halt_s:         1.0   # how long to hold that halt
 

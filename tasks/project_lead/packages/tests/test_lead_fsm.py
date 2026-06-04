@@ -102,6 +102,27 @@ def test_turn_directions_match_lane_convention():
     assert d.state_name == STATE_TURN_L and d.steering > 0.0
 
 
+def test_near_stop_sign_halts_directly():
+    # A STOP tag that fills enough of the frame is "close": the bot must halt on
+    # the sign itself, with no red stop-line (symmetric with SLOW acting now).
+    fsm = LeadFSM(_cfg(stop_tag_near_area_frac=0.04, stop_tag_halt_s=1.0))
+    near = SignObs(kind="STOP", bbox=(100, 100, 300, 300), score=1.0)  # 200*200/(640*480)=0.13
+    d = fsm.step(_wm(0.0, signs=[near]))
+    assert d.state_name == STATE_STOP and d.base_speed == 0.0
+    assert fsm.step(_wm(0.5)).state_name == STATE_STOP   # still within the halt window
+    assert fsm.step(_wm(1.1)).state_name == STATE_LANE   # window over -> resume
+
+
+def test_far_stop_sign_does_not_halt_directly():
+    # A small / far STOP tag is only remembered for the intersection, not a direct
+    # halt -- preserves the Duckietown red-line semantics.
+    fsm = LeadFSM(_cfg(stop_tag_near_area_frac=0.04))
+    far = SignObs(kind="STOP", bbox=(0, 0, 20, 20), score=1.0)         # 400/307200=0.0013
+    d = fsm.step(_wm(0.0, signs=[far]))
+    assert d.state_name == STATE_LANE
+    assert fsm._sign_pending is True                     # still latched for the red line
+
+
 def test_route_exhaustion_final_stop():
     fsm = LeadFSM(_cfg(route=["stop"]))
     # first intersection consumes the only step "stop" (no sign pending here)
@@ -186,12 +207,47 @@ def test_turn_exits_on_yaw_target():
 def test_turn_p_control_tapers():
     # The turn steer tapers as the remaining yaw error shrinks, with a floor.
     fsm = LeadFSM(_cfg(route=["left", "stop"], turn_yaw_target_rad=1.40, max_turn_s=99.0,
-                       turn_steer=0.25, turn_kp=0.8))
+                       turn_steer=0.25, turn_kp=0.8, left_widen=1.0))
     fsm.step(_wm(0.2, red=_red(), lane_healthy=False), turn_yaw_rad=0.0, fwd_dist_m=0.0)
     s_early = fsm.step(_wm(0.4, lane_healthy=False), turn_yaw_rad=0.3, fwd_dist_m=0.0).steering
     s_late  = fsm.step(_wm(0.6, lane_healthy=False), turn_yaw_rad=1.2, fwd_dist_m=0.0).steering
     assert abs(s_late) < abs(s_early)                        # tapers toward target
     assert abs(s_late) >= 0.10 - 1e-9                        # never below the floor
+
+
+def test_left_turn_wider_than_right():
+    # Left turns must sweep a wider arc than rights at a grid intersection, i.e.
+    # steer LESS for the same yaw progress (radius ~ base / steer).
+    common = dict(turn_yaw_target_rad=1.40, max_turn_s=99.0, turn_steer=0.25,
+                  turn_kp=0.8, left_widen=0.7)
+
+    right = LeadFSM(_cfg(route=["right", "stop"], **common))
+    right.step(_wm(0.2, red=_red(), lane_healthy=False), turn_yaw_rad=0.0, fwd_dist_m=0.0)
+    sr = right.step(_wm(0.4, lane_healthy=False), turn_yaw_rad=-0.3, fwd_dist_m=0.0).steering
+
+    left = LeadFSM(_cfg(route=["left", "stop"], **common))
+    left.step(_wm(0.2, red=_red(), lane_healthy=False), turn_yaw_rad=0.0, fwd_dist_m=0.0)
+    sl = left.step(_wm(0.4, lane_healthy=False), turn_yaw_rad=0.3, fwd_dist_m=0.0).steering
+
+    assert sr < 0.0 and sl > 0.0            # directions unchanged
+    assert abs(sl) < abs(sr)                # left steers less -> wider radius
+
+
+def test_left_widen_one_is_symmetric():
+    # left_widen=1.0 restores mirror-symmetry: right turns are untouched and the
+    # left/right steer magnitudes match at equal yaw progress.
+    common = dict(turn_yaw_target_rad=1.40, max_turn_s=99.0, turn_steer=0.25,
+                  turn_kp=0.8, left_widen=1.0)
+
+    right = LeadFSM(_cfg(route=["right", "stop"], **common))
+    right.step(_wm(0.2, red=_red(), lane_healthy=False), turn_yaw_rad=0.0, fwd_dist_m=0.0)
+    sr = right.step(_wm(0.4, lane_healthy=False), turn_yaw_rad=-0.3, fwd_dist_m=0.0).steering
+
+    left = LeadFSM(_cfg(route=["left", "stop"], **common))
+    left.step(_wm(0.2, red=_red(), lane_healthy=False), turn_yaw_rad=0.0, fwd_dist_m=0.0)
+    sl = left.step(_wm(0.4, lane_healthy=False), turn_yaw_rad=0.3, fwd_dist_m=0.0).steering
+
+    assert abs(abs(sl) - abs(sr)) < 1e-9
 
 
 def test_no_odometry_falls_back_to_timed():
