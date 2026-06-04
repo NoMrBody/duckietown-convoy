@@ -13,7 +13,7 @@ class CameraDriver(CameraDriverAbs):
         # negotiation failure. Let the source pick a native mode by framerate, then
         # scale to the desired output size via nvvidconv.
         pipeline = (
-          f"nvarguscamerasrc  ! "
+          f"nvarguscamerasrc wbmode={self.wbmode} saturation={self.saturation} ! "
           f"video/x-raw(memory:NVMM), format=NV12, framerate={self.framerate}/1 ! "
           f"nvvidconv ! "
           f"video/x-raw, width={self.width}, height={self.height}, format=BGRx ! "
