@@ -1,5 +1,4 @@
 import os
-import time
 import yaml
 import numpy as np
 import cv2
@@ -17,11 +16,6 @@ _LINE_OFFSET = 160
 _ROI_START   = 0.47
 _NUM_SLICES  = 3
 _SLICE_TOL   = 5
-# D term is tuned at ~30 FPS; normalize error_diff to this reference rate
-# so behavior doesn't drift when sim/robot run at different rates.
-_REFERENCE_DT = 1.0 / 30.0
-# Soft-recovery: keep coasting on last steering this many frames before zeroing.
-_COAST_FRAMES = 5
 
 
 def detect_lines_in_slices(
@@ -39,12 +33,12 @@ def detect_lines_in_slices(
         strip_y = mask_yellow[y - _SLICE_TOL: y + _SLICE_TOL, :]
         idx = np.where(strip_y > 0)[1]
         if len(idx) > 0:
-            yellow_xs.append(int(np.median(idx)))
+            yellow_xs.append(int(np.mean(idx)))
 
         strip_w = mask_white[y - _SLICE_TOL: y + _SLICE_TOL, :]
         idx = np.where(strip_w > 0)[1]
         if len(idx) > 0:
-            white_xs.append(int(np.median(idx)))
+            white_xs.append(int(np.mean(idx)))
 
     return yellow_xs, white_xs
 
@@ -64,9 +58,7 @@ class LaneServoingAgent:
         self.max_steer           = cfg.get('max_steer',           0.4)
         self.base_speed          = cfg.get('base_speed',          0.2)
         self.curve_speed         = cfg.get('curve_speed',         0.2)
-        # Lowered from 350: with 3 slices over ~h*0.35 vertical, 350px shift
-        # implies a near-impossible curve and effectively disabled curve mode.
-        self.curve_threshold     = cfg.get('curve_threshold',     80)
+        self.curve_threshold     = cfg.get('curve_threshold',     350)
         self.steering_threshold  = cfg.get('steering_threshold',  0.2)
         self.curve_boost         = cfg.get('curve_boost',         1.3)
         self.detection_threshold = cfg.get('detection_threshold', 500)
@@ -77,34 +69,14 @@ class LaneServoingAgent:
         self._lane_half_width   = float(_LINE_OFFSET)
         self._left_history      = deque(maxlen=3)
         self._right_history     = deque(maxlen=3)
-        self._last_left         = 0.0
-        self._last_right        = 0.0
-        self._coast_remaining   = 0
-        self._last_time         = None
         self.last_debug_info    = self._empty_debug_info(480, 640)
-
-    def reset(self):
-        """Clear PID/coast/smoothing state. Call when handing control back to
-        lane following after an open-loop maneuver (e.g. an intersection turn),
-        so the stale last command can't lurch the bot on re-entry."""
-        self._prev_error      = 0.0
-        self._filtered_error  = 0.0
-        self._coast_remaining = 0
-        self._left_history.clear()
-        self._right_history.clear()
-        self._last_left       = 0.0
-        self._last_right      = 0.0
-        self._last_time       = None
 
     def _calculate_error(self, yellow_xs, white_xs, left_det, right_det, w):
         if left_det and right_det and yellow_xs and white_xs:
             y_mean = float(np.mean(yellow_xs))
             w_mean = float(np.mean(white_xs))
-            # Only learn the half-width when geometry is sane: white must be
-            # to the right of yellow by a plausible margin. Otherwise a brief
-            # color misclassification can poison the running estimate.
-            if w_mean - y_mean > 40:
-                measured = (w_mean - y_mean) / 2.0
+            measured = (w_mean - y_mean) / 2.0
+            if measured > 20:
                 self._lane_half_width = 0.9 * self._lane_half_width + 0.1 * measured
             error = w / 2.0 - (y_mean + w_mean) / 2.0
         elif left_det and yellow_xs:
@@ -116,46 +88,37 @@ class LaneServoingAgent:
 
         return float(np.clip(error / (w / 2.0), -1.0, 1.0))
 
-    def _calculate_steering(self, error: float, dt: float) -> float:
-        # Normalize the derivative term by elapsed time so the D-gain behaves
-        # the same regardless of frame rate (sim vs. real robot can differ).
-        # Clamp dt to a sane band so a slow/duplicated frame can't blow up the
-        # rate factor, then cap the per-frame derivative kick. Without this a
-        # single jittery frame injects a large steering spike -> weaving.
-        dt = min(max(dt, 1.0 / 60.0), 1.0 / 10.0)
-        error_diff       = (error - self._prev_error) * (_REFERENCE_DT / dt)
-        error_diff       = float(np.clip(error_diff, -0.3, 0.3))
+    def _calculate_steering(self, error: float) -> float:
+        error_diff       = error - self._prev_error
         self._prev_error = error
         steering = self.p_gain * error + self.d_gain * error_diff
         return float(np.clip(steering, -self.max_steer, self.max_steer))
 
-    def _motor_commands(self, steering: float, recovery: bool, is_curve: bool, both_visible: bool, curve_dir: int):
+    def _motor_commands(self, steering: float, recovery: bool, is_curve: bool, both_visible: bool):
         if recovery:
             return 0.0, 0.0
 
         speed = self.curve_speed if is_curve else self.base_speed
-
+        
         if not both_visible:
             speed *= 0.8
 
         left  = speed - steering
         right = speed + steering
 
-        # Boost the outer wheel symmetrically. Use curve_dir (from line
-        # geometry) rather than the sign of the steering command, so a
-        # transiently noisy steering value can't flip the boost side.
         if is_curve and abs(steering) > self.steering_threshold:
-            if curve_dir > 0:        # curve bends right -> boost left wheel
+            if steering > 0:
+                right *= 5
+            else:
                 left  *= self.curve_boost
-            elif curve_dir < 0:      # curve bends left  -> boost right wheel
-                right *= self.curve_boost
 
         return float(np.clip(left, 0.0, 1.0)), float(np.clip(right, 0.0, 1.0))
 
     def _smooth(self, left, right, both_visible):
-        # Fixed-length moving average. Do NOT resize the buffer on both_visible
-        # flicker: rebuilding it discards history and injects step jumps exactly
-        # when the command is noisiest (a weave source on dashed lanes).
+        buf = 2 if both_visible else 1
+        if self._left_history.maxlen != buf:
+            self._left_history  = deque(maxlen=buf)
+            self._right_history = deque(maxlen=buf)
         self._left_history.append(left)
         self._right_history.append(right)
         return (sum(self._left_history)  / len(self._left_history),
@@ -163,10 +126,6 @@ class LaneServoingAgent:
 
     def compute_commands(self, image: np.ndarray) -> Tuple[float, float]:
         self.frame_count += 1
-        now = time.monotonic()
-        dt = (now - self._last_time) if self._last_time is not None else _REFERENCE_DT
-        self._last_time = now
-
         bgr = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
 
         try:
@@ -197,18 +156,7 @@ class LaneServoingAgent:
         h, w      = mask_y.shape
         left_det  = yellow_pixels > 0
         right_det = white_pixels  > 0
-        below_threshold = total_pixels < self.detection_threshold
-
-        # Soft recovery: don't stop on a single noisy frame. Replay the last
-        # command for a few frames; only zero out if the dropout persists.
-        if below_threshold:
-            self._coast_remaining -= 1
-            if self._coast_remaining > 0:
-                return self._last_left, self._last_right
-            recovery = True
-        else:
-            self._coast_remaining = _COAST_FRAMES
-            recovery = False
+        recovery  = total_pixels  < self.detection_threshold
 
         yellow_xs, white_xs = detect_lines_in_slices(mask_y, mask_w, h)
         both_visible        = left_det and right_det and not recovery
@@ -216,11 +164,9 @@ class LaneServoingAgent:
 
         raw_error            = self._calculate_error(yellow_xs, white_xs, left_det, right_det, w)
         self._filtered_error = 0.7 * self._filtered_error + 0.3 * raw_error
-        steering             = self._calculate_steering(self._filtered_error, dt)
-        left, right          = self._motor_commands(steering, recovery, is_curve, both_visible, curve_dir)
+        steering             = self._calculate_steering(self._filtered_error)
+        left, right          = self._motor_commands(steering, recovery, is_curve, both_visible)
         left, right          = self._smooth(left, right, both_visible)
-
-        self._last_left, self._last_right = left, right
 
         slice_height = int(h * 0.35 / _NUM_SLICES)
         start_y      = int(h * _ROI_START)

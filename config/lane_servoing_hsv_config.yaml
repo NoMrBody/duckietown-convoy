@@ -1,12 +1,16 @@
+# Lane HSV bounds, tuned from real-camera pixel samples (after the white-balance
+# fix) via the /video click-to-sample tool:
+#   yellow line: H=38 S=128 V=193     white line: H=77 S=30 V=169
+# Yellow is separated from the low-saturation floor by S_min; white by low S + high V.
 white_lower_h: 0
 white_lower_s: 0
-white_lower_v: 180
+white_lower_v: 140
 white_upper_h: 179
 white_upper_s: 60
 white_upper_v: 255
-yellow_lower_h: 80
-yellow_lower_s: 94
-yellow_lower_v: 96
-yellow_upper_h: 120
+yellow_lower_h: 25
+yellow_lower_s: 80
+yellow_lower_v: 100
+yellow_upper_h: 50
 yellow_upper_s: 255
 yellow_upper_v: 255

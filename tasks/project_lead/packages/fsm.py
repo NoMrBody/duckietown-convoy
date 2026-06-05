@@ -40,12 +40,20 @@ class LeadFSM:
         self.stop_duration = float(cfg.get("stop_duration", 1.0))
         self.slow_duration = float(cfg.get("slow_duration", 1.5))
         self.slow_cooldown = float(cfg.get("slow_cooldown", 3.0))
+        # A STOP tag whose bbox covers >= this fraction of the frame is treated
+        # as "close" and halts the bot directly (not only at a red line).
+        self.stop_tag_near_area_frac = float(cfg.get("stop_tag_near_area_frac", 0.04))
+        self.stop_tag_halt_s = float(cfg.get("stop_tag_halt_s", 1.0))
 
         self.route = [str(s).lower() for s in (cfg.get("route") or ["stop"])]
 
         # Maneuver shape / timing
         self.turn_base   = float(cfg.get("turn_base_speed", 0.25))
         self.turn_steer  = float(cfg.get("turn_steer", self.turn_base))
+        # Left turns at a grid intersection sweep a wider arc than rights: scale
+        # the left steer law down (and optionally its forward speed up).
+        self.left_widen       = float(cfg.get("left_widen", 0.7))
+        self.left_base_factor = float(cfg.get("left_base_factor", 1.0))
         self.cross_base  = float(cfg.get("cross_base_speed", 0.25))
         self.min_turn_s  = float(cfg.get("min_turn_s", 0.8))
         self.max_turn_s  = float(cfg.get("max_turn_s", 3.0))
@@ -73,6 +81,7 @@ class LeadFSM:
         self._stop_until = -1.0
         self._slow_until = -1.0
         self._slow_cooldown_until = -1.0
+        self._stop_tag_cooldown_until = -1.0
         self._sign_pending = False
         self._maneuver: Optional[str] = None
         self._maneuver_start = 0.0
@@ -147,6 +156,19 @@ class LeadFSM:
         kinds = {s.kind for s in wm.signs}
         if "STOP" in kinds:
             self._sign_pending = True  # remembered until the intersection consumes it
+            # A STOP tag that fills enough of the frame is close: halt directly so
+            # the bot reacts to the sign itself, not only at the intersection red
+            # line (symmetric with SLOW acting immediately). Gated on bbox size so
+            # a far / handheld tag doesn't trip it, and cooled down so it doesn't
+            # re-arm every frame while the sign stays in view.
+            frame_area = max(1, wm.frame_w * wm.frame_h)
+            stop_area = max((max(0, s.bbox[2] - s.bbox[0]) * max(0, s.bbox[3] - s.bbox[1])
+                             for s in wm.signs if s.kind == "STOP"), default=0)
+            if (stop_area / frame_area >= self.stop_tag_near_area_frac
+                    and wm.t >= self._stop_tag_cooldown_until):
+                self._stop_until = wm.t + self.stop_tag_halt_s
+                self._stop_tag_cooldown_until = (
+                    wm.t + self.stop_tag_halt_s + self.slow_cooldown)
         if "SLOW" in kinds and wm.t >= self._slow_cooldown_until:
             self._slow_until = wm.t + self.slow_duration
             self._slow_cooldown_until = wm.t + self.slow_duration + self.slow_cooldown
@@ -219,17 +241,24 @@ class LeadFSM:
         if is_turn:
             # Lane convention: +steer turns LEFT, -steer turns RIGHT.
             sign = 1.0 if step == "left" else -1.0
+            # Left turns sweep a wider arc than rights at a grid intersection:
+            # scale the whole steer law (ceiling + floor) down for lefts so the
+            # radius opens out, and optionally raise the forward speed.
+            widen       = self.left_widen if step == "left" else 1.0
+            steer_cap   = self.turn_steer * widen
+            steer_floor = 0.10 * widen
+            base        = self.turn_base * (self.left_base_factor if step == "left" else 1.0)
             if have_odo and self.turn_yaw_target > 0:
                 # Taper steer as the remaining yaw error shrinks, with a floor so
                 # the bot keeps rotating until it reaches the target heading.
                 yaw_err = self.turn_yaw_target - abs(turn_yaw_rad)
-                mag = clamp(self.turn_steer * self.turn_kp * yaw_err / self.turn_yaw_target,
-                            0.10, self.turn_steer)
+                mag = clamp(steer_cap * self.turn_kp * yaw_err / self.turn_yaw_target,
+                            steer_floor, steer_cap)
                 steer = sign * mag
             else:
-                steer = sign * self.turn_steer                 # legacy fixed arc
+                steer = sign * steer_cap                       # legacy fixed arc
             name = STATE_TURN_L if step == "left" else STATE_TURN_R
-            return self._decide(name, self.turn_base, steer, WHITE)
+            return self._decide(name, base, steer, WHITE)
 
         # Straight cross: hold heading with a small P term on yaw drift.
         # yaw > 0 means drifting left -> negative steer corrects back right.

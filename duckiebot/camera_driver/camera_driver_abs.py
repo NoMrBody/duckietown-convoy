@@ -109,6 +109,11 @@ class CameraDriverAbs(ABC):
             self.model = config.get('model', 'Unknown')
             self.fov = config.get('fov', 160)
             self.exposure_mode = config.get('exposure_mode', 'sports')
+            # White balance (fixes the IMX219 green cast). nvarguscamerasrc wbmode:
+            #   0=off 1=auto 2=incandescent 3=fluorescent 4=daylight 5=cloudy 6=twilight
+            # If auto (1) still looks green, try 3 (lab fluorescent) or 4 (daylight).
+            self.wbmode = config.get('wbmode', 1)
+            self.saturation = config.get('saturation', 1.0)
 
             print(f"[CameraDriver] Loaded config from {filepath}")
 

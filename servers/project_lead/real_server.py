@@ -27,12 +27,38 @@ INDEX_HTML = """<!doctype html>
 <style>
   body { margin:0; background:#111; color:#eee; font-family:sans-serif; }
   header { padding:12px 16px; background:#1a1a1a; border-bottom:1px solid #333; }
+  header .hint { color:#888; font-size:13px; font-weight:normal; }
   main { display:flex; justify-content:center; padding:16px; }
-  img.stream { max-width:100%; height:auto; border:1px solid #333; background:#000; }
+  img.stream { max-width:100%; height:auto; border:1px solid #333; background:#000; cursor:crosshair; }
+  #hsv { text-align:center; font-family:monospace; font-size:18px; padding:6px; min-height:22px; }
+  #log { max-width:640px; margin:0 auto; font-family:monospace; font-size:12px; color:#9bd; }
 </style></head>
 <body>
-  <header>Convoy — Lead Bot</header>
-  <main><img class="stream" src="/video" alt="camera"></main>
+  <header>Convoy — Lead Bot &nbsp;<span class="hint">click the line in the top-left camera panel to read its H/S/V</span></header>
+  <main><img id="cam" class="stream" src="/video" alt="camera"></main>
+  <div id="hsv"></div>
+  <div id="log"></div>
+<script>
+  const img = document.getElementById('cam');
+  const out = document.getElementById('hsv');
+  const log = document.getElementById('log');
+  img.addEventListener('click', async (e) => {
+    const r = img.getBoundingClientRect();
+    const fx = (e.clientX - r.left) / r.width;
+    const fy = (e.clientY - r.top) / r.height;
+    try {
+      const resp = await fetch('/sample?fx=' + fx.toFixed(4) + '&fy=' + fy.toFixed(4));
+      const d = await resp.json();
+      if (d.hint)  { out.style.color = '#fc8'; out.textContent = d.hint; return; }
+      if (d.error) { out.style.color = '#f88'; out.textContent = d.error; return; }
+      out.style.color = '#8f8';
+      out.textContent = 'H ' + d.h + '   S ' + d.s + '   V ' + d.v + '   (pixel ' + d.px + ',' + d.py + ')';
+      const line = document.createElement('div');
+      line.textContent = 'H=' + d.h + ' S=' + d.s + ' V=' + d.v;
+      log.prepend(line);
+    } catch (err) { out.style.color = '#f88'; out.textContent = 'sample failed'; }
+  });
+</script>
 </body></html>
 """
 
@@ -46,6 +72,10 @@ stop_event = threading.Event()
 _frame_queue = queue.Queue(maxsize=2)
 _debug_info_lock = threading.Lock()
 _debug_info = {}
+
+# Latest raw camera frame (BGR), kept for the click-to-sample HSV tool.
+_latest_frame = None
+_latest_frame_lock = threading.Lock()
 
 # Display stream: downscale + lower JPEG quality so frames are ~4x smaller over
 # wifi (cuts latency), and always send the freshest frame (drain the queue).
@@ -130,6 +160,7 @@ def visualize(frame_bgr):
 
 def generate_frames():
     import time
+    global _latest_frame
     while True:
         try:
             frame = _frame_queue.get(timeout=0.5)
@@ -139,6 +170,8 @@ def generate_frames():
                     frame = _frame_queue.get_nowait()
                 except queue.Empty:
                     break
+            with _latest_frame_lock:
+                _latest_frame = frame
             if _SHOW_MASKS and _MASKS_AVAILABLE:
                 display = _montage(frame)
             else:
@@ -176,6 +209,46 @@ def video():
 def status():
     with _debug_info_lock:
         return jsonify(dict(_debug_info))
+
+
+@app.route('/sample')
+def sample():
+    """Click-to-sample HSV for tuning. fx/fy are click fractions [0,1] over the
+    streamed image. With the 2x2 montage the camera is the top-left quarter;
+    otherwise the whole frame. Returns the median H/S/V of a small patch in the
+    same BGR->HSV space the lane/red detectors use -- paste straight into the
+    HSV config."""
+    try:
+        fx = float(request.args.get('fx', -1.0))
+        fy = float(request.args.get('fy', -1.0))
+    except ValueError:
+        return jsonify(error='bad coords')
+    with _latest_frame_lock:
+        frame = None if _latest_frame is None else _latest_frame.copy()
+    if frame is None:
+        return jsonify(error='no frame yet')
+
+    if _SHOW_MASKS and _MASKS_AVAILABLE:
+        if not (0.0 <= fx < 0.5 and 0.0 <= fy < 0.5):
+            return jsonify(hint='click the line in the TOP-LEFT camera panel')
+        sx, sy = fx * 2.0, fy * 2.0           # quarter -> full-frame fraction
+    else:
+        sx, sy = fx, fy
+    if not (0.0 <= sx <= 1.0 and 0.0 <= sy <= 1.0):
+        return jsonify(error='out of range')
+
+    h_img, w_img = frame.shape[:2]
+    px = min(w_img - 1, max(0, int(sx * w_img)))
+    py = min(h_img - 1, max(0, int(sy * h_img)))
+    r = 3
+    patch = frame[max(0, py - r):py + r + 1, max(0, px - r):px + r + 1]
+    hsv = cv2.cvtColor(patch, cv2.COLOR_BGR2HSV)
+    return jsonify(
+        h=int(np.median(hsv[:, :, 0])),
+        s=int(np.median(hsv[:, :, 1])),
+        v=int(np.median(hsv[:, :, 2])),
+        px=px, py=py,
+    )
 
 
 @app.route('/command', methods=['POST'])

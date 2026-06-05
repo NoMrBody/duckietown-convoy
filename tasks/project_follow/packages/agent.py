@@ -32,13 +32,30 @@ def main(camera, wheels, leds, stop_event,
     last_fps_update = 0.0
     frame_count = 0
     fps = 0.0
+    cam_fail = 0
 
     try:
         while not stop_event.is_set():
             ok, frame = camera.read()
             if not ok:
+                cam_fail += 1
+                if cam_fail == 5:
+                    print("[follow] camera returned no frames — check nvargus-daemon and "
+                          "that no other process is holding the camera")
+                # Auto-recover from a transient nvargus/caps hiccup that would
+                # otherwise leave the video stuck on "Waiting for frames" forever.
+                if cam_fail % 150 == 0:
+                    print(f"[follow] re-initializing camera after {cam_fail} empty reads...")
+                    try:
+                        camera.stop()
+                        camera.start()
+                    except Exception as e:
+                        print(f"[follow] camera re-init failed: {e}")
                 time.sleep(0.02)
                 continue
+            if cam_fail:
+                print(f"[follow] camera recovered after {cam_fail} empty reads")
+                cam_fail = 0
 
             if frame_queue is not None:
                 try:
