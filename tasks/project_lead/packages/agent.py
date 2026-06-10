@@ -124,6 +124,7 @@ def main(camera, wheels, leds, stop_event,
                 # None on both falls back to lane-reacquisition + timeout.
                 turn_yaw = None
                 fwd_dist = None
+                odo_source = None
                 if in_maneuver:
                     if encoders is not None:
                         try:
@@ -131,6 +132,7 @@ def main(camera, wheels, leds, stop_event,
                             dr = encoders.right.distance_m()
                             turn_yaw = (dr - dl) / max(baseline, 1e-3)
                             fwd_dist = 0.5 * (dl + dr)
+                            odo_source = "encoders"
                         except Exception:
                             turn_yaw = None
                             fwd_dist = None
@@ -138,8 +140,10 @@ def main(camera, wheels, leds, stop_event,
                         dth = pose[2] - man_pose0[2]
                         turn_yaw = math.atan2(math.sin(dth), math.cos(dth))
                         fwd_dist = math.hypot(pose[0] - man_pose0[0], pose[1] - man_pose0[1])
+                        odo_source = "pose"
 
-                decision = fsm.step(wm, turn_yaw_rad=turn_yaw, fwd_dist_m=fwd_dist, pose=pose)
+                decision = fsm.step(wm, turn_yaw_rad=turn_yaw, fwd_dist_m=fwd_dist,
+                                    pose=pose, odo_source=odo_source)
                 if fsm.request_lane_reset:
                     perception.reset_lane()
 

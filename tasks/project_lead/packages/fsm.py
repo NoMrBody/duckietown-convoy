@@ -67,6 +67,13 @@ class LeadFSM:
         self.slow_after_turn_s = float(cfg.get("slow_after_turn_s", 2.0))
         self.slow_after_factor = float(cfg.get("slow_after_factor", 0.6))
 
+        # Slow down through map curves: the lane PD's steering differential
+        # was tuned around the lane agent's own base speed — at full cruise
+        # the same steer yields proportionally less curvature and the bot
+        # runs wide across the center line on 90-deg curve tiles.
+        self.curve_speed_factor   = float(cfg.get("curve_speed_factor", 0.6))
+        self.curve_steer_threshold = float(cfg.get("curve_steer_threshold", 0.10))
+
         # Closed-loop odometry maneuver targets (used only when the agent passes
         # encoder distance/yaw; otherwise the timed values above are the fallback).
         self.cross_distance_m = float(cfg.get("cross_distance_m", 0.35))
@@ -74,6 +81,15 @@ class LeadFSM:
         self.turn_kp          = float(cfg.get("turn_kp", 0.8))
         self.cross_dist_tol_m = float(cfg.get("cross_dist_tol_m", 0.03))
         self.turn_yaw_tol_rad = float(cfg.get("turn_yaw_tol_rad", 0.08))
+
+        # Sim turn geometry (pose odometry only). The field-tuned steer caps
+        # assume real-motor deadzones; in the ideal simulator they pivot the
+        # bot on the spot, dropping it off the lane so the lane controller
+        # overshoots correcting. Steer for a target arc radius instead:
+        # R = base * baseline / (2 * steer), platform-independent.
+        self.baseline_m         = float(cfg.get("wheel_baseline_m", 0.10))
+        self.turn_radius_left_m  = float(cfg.get("turn_radius_left_m", 0.40))
+        self.turn_radius_right_m = float(cfg.get("turn_radius_right_m", 0.17))
 
         # Red-line intersection firing gates + clear latch
         self.fire_dist   = float(cfg.get("stopline_fire_dist", 0.45))
@@ -102,7 +118,8 @@ class LeadFSM:
     # --- public ---------------------------------------------------------------
     def step(self, wm: WorldModel, turn_yaw_rad: Optional[float] = None,
              fwd_dist_m: Optional[float] = None,
-             pose: Optional[tuple] = None) -> Decision:
+             pose: Optional[tuple] = None,
+             odo_source: Optional[str] = None) -> Decision:
         self.request_lane_reset = False
         t = wm.t
         self._update_latch(wm)
@@ -113,7 +130,7 @@ class LeadFSM:
 
         # 1) an active maneuver takes precedence
         if self._maneuver is not None:
-            return self._run_maneuver(wm, t, turn_yaw_rad, fwd_dist_m)
+            return self._run_maneuver(wm, t, turn_yaw_rad, fwd_dist_m, odo_source)
 
         # 2) halting at the line for a pending STOP
         if t < self._stop_until:
@@ -124,7 +141,7 @@ class LeadFSM:
             self._begin_step(step, t)
             if self._done:
                 return self._decide(STATE_DONE, 0.0, 0.0, RED)
-            return self._run_maneuver(wm, t, turn_yaw_rad, fwd_dist_m)
+            return self._run_maneuver(wm, t, turn_yaw_rad, fwd_dist_m, odo_source)
 
         # 3) slow-after-turn window (give the follower time to reacquire)
         if t < self._slow_after_until:
@@ -152,15 +169,20 @@ class LeadFSM:
             self._begin_step(step, t)
             if self._done:
                 return self._decide(STATE_DONE, 0.0, 0.0, RED)
-            return self._run_maneuver(wm, t, turn_yaw_rad, fwd_dist_m)
+            return self._run_maneuver(wm, t, turn_yaw_rad, fwd_dist_m, odo_source)
 
         # 5) slow zone (timed)
         if t < self._slow_until:
             return self._decide(STATE_SLOW, self.cruise_speed * self.slow_factor,
                                 wm.lane.steering_suggestion, YELLOW)
 
-        # 6) default: lane following
-        return self._decide(STATE_LANE, self.cruise_speed, wm.lane.steering_suggestion, GREEN)
+        # 6) default: lane following; slow through curves so the PD's steer
+        #    produces enough curvature to hold the lane.
+        steer = wm.lane.steering_suggestion
+        speed = self.cruise_speed
+        if wm.lane.is_curve or abs(steer) >= self.curve_steer_threshold:
+            speed *= self.curve_speed_factor
+        return self._decide(STATE_LANE, speed, steer, GREEN)
 
     # --- internals ------------------------------------------------------------
     def _ingest_signs(self, wm: WorldModel) -> None:
@@ -218,7 +240,8 @@ class LeadFSM:
 
     def _run_maneuver(self, wm: WorldModel, t: float,
                       turn_yaw_rad: Optional[float],
-                      fwd_dist_m: Optional[float]) -> Decision:
+                      fwd_dist_m: Optional[float],
+                      odo_source: Optional[str] = None) -> Decision:
         step = self._maneuver
         elapsed = t - self._maneuver_start
         is_turn = step in _TURN_STEPS
@@ -259,6 +282,17 @@ class LeadFSM:
             steer_cap   = self.turn_steer * widen
             steer_floor = 0.10 * widen
             base        = self.turn_base * (self.left_base_factor if step == "left" else 1.0)
+            if odo_source == "pose":
+                # Simulation: the field-tuned caps above assume real-motor
+                # deadzones and pivot the ideal sim bot on the spot, dropping
+                # it off the lane. Steer for the intersection's actual arc
+                # radius instead (R = base*baseline/(2*steer)) so the turn
+                # SWEEPS onto the exit lane and the lane controller re-enters
+                # with a small error instead of overshooting the markings.
+                radius = self.turn_radius_left_m if step == "left" else self.turn_radius_right_m
+                steer_cap = clamp(base * self.baseline_m / (2.0 * max(radius, 1e-3)),
+                                  0.02, self.turn_steer)
+                steer_floor = 0.45 * steer_cap
             if have_odo and self.turn_yaw_target > 0:
                 # Taper steer as the remaining yaw error shrinks, with a floor so
                 # the bot keeps rotating until it reaches the target heading.

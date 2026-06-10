@@ -27,6 +27,19 @@ auto_seed: null
 # 4-way (the scene's DuckieBot start pose).
 route: [straight, straight, straight, left, right]
 
+# --- sim turn geometry (pose odometry only; the real robot keeps the
+#     field-tuned steer caps below) ---
+turn_radius_left_m:  0.40   # target arc radius for left turns (outer lane arc ~0.43 m)
+turn_radius_right_m: 0.17   # target arc radius for right turns (inner lane arc ~0.17 m)
+
+# --- curve slowdown ---
+# The lane PD's steering was tuned around the lane agent's own base speed; at
+# full cruise the same steer differential gives proportionally less curvature
+# and the bot runs wide into the opposing lane on 90-deg curves. Slow down
+# when a curve is detected (or steering demand is high).
+curve_speed_factor:    0.6   # cruise multiplier through curves
+curve_steer_threshold: 0.10  # |lane steer| above this also counts as a curve
+
 # --- maneuver shape / timing (FIELD-TUNE) ---
 turn_base_speed:    0.30    # forward speed during a turn arc
 turn_steer:         0.25    # steer magnitude during a turn (clamped to base by control)
