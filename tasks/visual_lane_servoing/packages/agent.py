@@ -115,7 +115,7 @@ class LaneServoingAgent:
 
         if is_curve and abs(steering) > self.steering_threshold:
             if steering > 0:
-                right *= 5
+                right *= self.curve_boost
             else:
                 left  *= self.curve_boost
 
