@@ -257,5 +257,14 @@ func _send_state() -> void:
 			"distance_from_start": final_distance_from_start
 		}
 
+	# Include the NPC leader's pose when the scene has one (convoy follow
+	# scene), so the sim UI can draw it and the gap is measurable.
+	var npcs := get_tree().get_nodes_in_group("npc_leader")
+	if npcs.size() > 0:
+		var npc := npcs[0] as Node3D
+		if npc != null:
+			state["npc_x"] = npc.global_position.x
+			state["npc_z"] = npc.global_position.z
+
 	state["type"] = "state"
 	_queue_send(state)

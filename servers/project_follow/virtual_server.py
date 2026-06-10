@@ -223,6 +223,18 @@ def video():
     return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 
+@app.route('/frame.jpg')
+def frame_jpg():
+    """Latest raw full-resolution camera frame (debug / offline analysis)."""
+    frame = _frame_queue.get_latest()
+    if frame is None:
+        return jsonify(error='no frame yet'), 503
+    ok, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 92])
+    if not ok:
+        return jsonify(error='encode failed'), 500
+    return Response(jpeg.tobytes(), mimetype='image/jpeg')
+
+
 @app.route('/status')
 def status():
     running = _agent_alive()
@@ -231,11 +243,14 @@ def status():
         # is paused, poll here so pose/game state stay fresh.
         wheels.is_game_over()
     pose = None
+    leader_pose = None
     game = {}
     if wheels is not None:
         gs = wheels.game_state
         if gs.pose_x is not None:
             pose = {'x': gs.pose_x, 'z': gs.pose_z, 'theta': gs.heading_rad}
+        if getattr(gs, 'npc_x', None) is not None:
+            leader_pose = {'x': gs.npc_x, 'z': gs.npc_z}
         game = {
             'game_over': gs.game_over,
             'survival_time': round(gs.survival_time, 1),
@@ -251,6 +266,7 @@ def status():
         'agent': info,
         'agent_running': running,
         'pose': pose,
+        'leader_pose': leader_pose,
         'game': game,
         'leader_cfg': _LEADER_CFG,
     })

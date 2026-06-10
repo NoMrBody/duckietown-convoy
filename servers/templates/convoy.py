@@ -121,7 +121,7 @@ const STATE_COLORS = {
     STOP_AT_SIGN: 'var(--accent-red)', CLOSE_STOP: 'var(--accent-red)',
     ROUTE_DONE: 'var(--accent-purple)',
     SLOW_ZONE: 'var(--accent-orange)', SLOW_AFTER_TURN: 'var(--accent-orange)',
-    REACQUIRE: 'var(--accent-orange)',
+    REACQUIRE: 'var(--accent-orange)', PURSUIT_TURN: 'var(--accent-orange)',
     TURN_LEFT: 'var(--accent-blue)', TURN_RIGHT: 'var(--accent-blue)',
     CROSS_STRAIGHT: 'var(--accent-blue)',
     WAIT_LEAD: 'var(--text-muted)', HOLD: 'var(--text-muted)'
@@ -215,7 +215,7 @@ async function pollStatus() {
     try {
         const d = await (await fetch('/status')).json();
         updateAgentPanel(d);
-        onPose(d.pose);
+        onPose(d.pose, d.leader_pose);
     } catch (e) { /* server restarting; keep polling */ }
 }
 setInterval(pollStatus, 250);
@@ -400,8 +400,11 @@ function setupMap() {
     return true;
 }
 
-function onPose(p) {
+let leaderPose = null;
+
+function onPose(p, lp) {
     if (!MAP_OK) return;  // no map card; keep the 'map scene not found' note
+    leaderPose = lp || null;
     const srcEl = document.getElementById('pose-source');
     if (!p) {
         srcEl.textContent = 'no pose';
@@ -443,6 +446,11 @@ function drawLive() {
         g.beginPath();
         trail.forEach((p, i) => i ? g.lineTo(wx(p[0]), wz(p[1])) : g.moveTo(wx(p[0]), wz(p[1])));
         g.stroke();
+    }
+    if (leaderPose) {  // live NPC leader (follow scene)
+        g.fillStyle = '#22d3ee';
+        g.beginPath(); g.arc(wx(leaderPose.x), wz(leaderPose.z), 0.05 * SCALE, 0, 2 * Math.PI); g.fill();
+        g.strokeStyle = '#fff'; g.lineWidth = 1; g.stroke();
     }
     if (poseTarget) {
         const t = Math.min(1, (performance.now() - poseT0) / 260);

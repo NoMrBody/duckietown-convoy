@@ -44,6 +44,9 @@ class GameState:
     pose_x: Optional[float] = None
     pose_z: Optional[float] = None
     heading_rad: Optional[float] = None
+    # NPC leader pose (convoy follow scene only).
+    npc_x: Optional[float] = None
+    npc_z: Optional[float] = None
 
 
 class GodotWheelTransport:
@@ -176,6 +179,8 @@ class GodotWheelTransport:
                     pose_x=_opt_float("pose_x"),
                     pose_z=_opt_float("pose_z"),
                     heading_rad=_opt_float("heading_rad"),
+                    npc_x=_opt_float("npc_x"),
+                    npc_z=_opt_float("npc_z"),
                 )
 
         except Exception as e:
