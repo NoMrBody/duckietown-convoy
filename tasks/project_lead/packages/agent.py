@@ -27,7 +27,11 @@ def _load_cfg() -> dict:
 def main(camera, wheels, leds, stop_event,
          frame_queue=None, debug_lock=None, debug_dict=None, encoders=None):
     cfg = _load_cfg()
-    perception = LeadPerception(cfg)
+    try:
+        perception = LeadPerception(cfg)
+    except Exception as e:
+        print(f"[lead] perception init failed: {e!r} — streaming camera only, no control")
+        perception = None
     fsm = LeadFSM(cfg)
     baseline = float(cfg.get("wheel_baseline_m", 0.1))
 
@@ -63,6 +67,10 @@ def main(camera, wheels, leds, stop_event,
                 print(f"[lead] camera recovered after {cam_fail} empty reads")
                 cam_fail = 0
 
+            # Queue the frame for the browser FIRST, before any vision/control
+            # work. Everything below is wrapped so a perception/FSM error is
+            # logged and skipped -- it can never kill the loop and freeze the
+            # stream on "Waiting for frames".
             if frame_queue is not None:
                 try:
                     frame_queue.put_nowait(frame.copy())
@@ -70,68 +78,78 @@ def main(camera, wheels, leds, stop_event,
                     pass
 
             now = time.monotonic()
-            wm = perception.update(frame, now)
-
-            # Encoder odometry closes the loop on maneuvers when available: yaw
-            # for turns, forward distance for straight crosses. None on either
-            # falls back to lane-reacquisition + timeout inside the FSM.
-            turn_yaw = None
-            fwd_dist = None
-            if encoders is not None and in_maneuver:
-                try:
-                    dl = encoders.left.distance_m()
-                    dr = encoders.right.distance_m()
-                    turn_yaw = (dr - dl) / max(baseline, 1e-3)
-                    fwd_dist = 0.5 * (dl + dr)
-                except Exception:
-                    turn_yaw = None
-                    fwd_dist = None
-
-            decision = fsm.step(wm, turn_yaw_rad=turn_yaw, fwd_dist_m=fwd_dist)
-            if fsm.request_lane_reset:
-                perception.reset_lane()
-
-            left, right = motors_from_decision(decision)
-
-            # Reset encoders at maneuver entry so yaw integrates from zero.
-            is_man = decision.state_name in _MANEUVER_STATES
-            if is_man and not in_maneuver and encoders is not None:
-                try:
-                    encoders.reset()
-                    encoders.set_directions(True, True)
-                except Exception:
-                    pass
-            in_maneuver = is_man
-
             frame_count += 1
             if now - last_fps_update > 1.0:
                 fps = frame_count / (now - last_fps_update)
                 frame_count = 0
                 last_fps_update = now
 
-            if debug_lock is not None and debug_dict is not None:
-                dbg = perception.last_debug_info
-                with debug_lock:
-                    debug_dict.update({
-                        'state': decision.state_name,
-                        'base_speed': decision.base_speed,
-                        'steering': decision.steering,
-                        'left_speed': left,
-                        'right_speed': right,
-                        'apriltag_ids': dbg.get('apriltag_ids', []),
-                        'red_line': dbg.get('red_line'),
-                        'route_idx': fsm.route_idx,
-                        'fps': fps,
-                    })
+            if perception is None:
+                time.sleep(0.005)        # no control pipeline; just stream frames
+                continue
 
-            if now - last_dbg > 0.5:
-                dbg = perception.last_debug_info
-                print(f"[lead] {decision.state_name} "
-                      f"route={fsm.route_idx}/{len(fsm.route)} "
-                      f"tags={dbg.get('apriltag_ids')} redline={dbg.get('red_line')} "
-                      f"base={decision.base_speed:.2f} steer={decision.steering:+.2f} "
-                      f"L={left:.2f} R={right:.2f}")
-                last_dbg = now
+            try:
+                wm = perception.update(frame, now)
+
+                # Encoder odometry closes the loop on maneuvers when available:
+                # yaw for turns, forward distance for straight crosses. None on
+                # either falls back to lane-reacquisition + timeout in the FSM.
+                turn_yaw = None
+                fwd_dist = None
+                if encoders is not None and in_maneuver:
+                    try:
+                        dl = encoders.left.distance_m()
+                        dr = encoders.right.distance_m()
+                        turn_yaw = (dr - dl) / max(baseline, 1e-3)
+                        fwd_dist = 0.5 * (dl + dr)
+                    except Exception:
+                        turn_yaw = None
+                        fwd_dist = None
+
+                decision = fsm.step(wm, turn_yaw_rad=turn_yaw, fwd_dist_m=fwd_dist)
+                if fsm.request_lane_reset:
+                    perception.reset_lane()
+
+                left, right = motors_from_decision(decision)
+
+                # Reset encoders at maneuver entry so yaw integrates from zero.
+                is_man = decision.state_name in _MANEUVER_STATES
+                if is_man and not in_maneuver and encoders is not None:
+                    try:
+                        encoders.reset()
+                        encoders.set_directions(True, True)
+                    except Exception:
+                        pass
+                in_maneuver = is_man
+
+                if debug_lock is not None and debug_dict is not None:
+                    dbg = perception.last_debug_info
+                    with debug_lock:
+                        debug_dict.update({
+                            'state': decision.state_name,
+                            'base_speed': decision.base_speed,
+                            'steering': decision.steering,
+                            'left_speed': left,
+                            'right_speed': right,
+                            'apriltag_ids': dbg.get('apriltag_ids', []),
+                            'red_line': dbg.get('red_line'),
+                            'route_idx': fsm.route_idx,
+                            'fps': fps,
+                        })
+
+                if now - last_dbg > 0.5:
+                    dbg = perception.last_debug_info
+                    print(f"[lead] {decision.state_name} "
+                          f"route={fsm.route_idx}/{len(fsm.route)} "
+                          f"tags={dbg.get('apriltag_ids')} redline={dbg.get('red_line')} "
+                          f"base={decision.base_speed:.2f} steer={decision.steering:+.2f} "
+                          f"L={left:.2f} R={right:.2f}")
+                    last_dbg = now
+            except Exception as e:
+                if now - last_hw_warn > 2.0:
+                    print(f"[lead] control error (camera still streaming): {e!r}")
+                    last_hw_warn = now
+                continue
 
             try:
                 wheels.set_wheels_speed(left, right)

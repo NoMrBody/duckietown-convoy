@@ -71,6 +71,13 @@ class LaneServoingAgent:
         self._right_history     = deque(maxlen=3)
         self.last_debug_info    = self._empty_debug_info(480, 640)
 
+    def reset(self) -> None:
+        """Clear PID/smoothing state between maneuvers; keeps the learned lane width."""
+        self._prev_error     = 0.0
+        self._filtered_error = 0.0
+        self._left_history.clear()
+        self._right_history.clear()
+
     def _calculate_error(self, yellow_xs, white_xs, left_det, right_det, w):
         if left_det and right_det and yellow_xs and white_xs:
             y_mean = float(np.mean(yellow_xs))
