@@ -1,7 +1,26 @@
 import logging
 import re
+import threading
 import time
 import cv2
+
+
+class LatestFrame:
+    """Single-slot frame holder: the newest frame always wins, never blocks
+    and never fills up. Queue-compatible put_nowait so agents can treat it
+    like the real servers' frame queue."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._frame = None
+
+    def put_nowait(self, frame):
+        with self._lock:
+            self._frame = frame
+
+    def get_latest(self):
+        with self._lock:
+            return self._frame
 
 
 class _HttpErrorsOnly(logging.Filter):

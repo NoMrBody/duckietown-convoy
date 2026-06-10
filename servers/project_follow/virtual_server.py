@@ -22,9 +22,9 @@ from servers.common import LatestFrame, shutdown_cleanup, suppress_http_logs
 from servers.sim_map import load_map_for_scene
 from servers.templates.convoy import get_template
 
-import tasks.project_lead.packages.agent as agent
+import tasks.project_follow.packages.agent as agent
 
-HTML_TEMPLATE = get_template('lead', 'Convoy — Lead Bot', 'Godot Simulation')
+HTML_TEMPLATE = get_template('follow', 'Convoy — Follower Bot', 'Godot Simulation')
 
 app        = Flask(__name__)
 camera     = None
@@ -38,33 +38,42 @@ _frame_queue     = LatestFrame()
 _debug_info_lock = threading.Lock()
 _debug_info      = {}
 
-_MAP_DATA  = load_map_for_scene(GODOT_SCENES.get('project_lead', ''))
-_CONFIG_FILE = os.path.normpath(os.path.join(script_dir, '..', '..', 'config', 'project_lead_config.yaml'))
+_MAP_DATA    = load_map_for_scene(GODOT_SCENES.get('project_follow', ''))
+_CONFIG_FILE = os.path.normpath(os.path.join(script_dir, '..', '..', 'config', 'project_follow_config.yaml'))
 
-# Optional 2x2 debug montage: annotated camera + yellow / white / red masks,
-# same panels as the real lead server, so HSV tuning carries over to the sim.
+# Span thresholds for the UI gauge (defaults mirror FollowerFSM's).
+_LEADER_CFG = {'grid_safe_px': 18.0, 'grid_stop_px': 70.0, 'grid_arm_px': 60.0}
+
+# Lateral offset of the leader as seen by the server-side grid tracker (the
+# agent's debug dict doesn't carry it); [-1, 1], None when the grid is lost.
+# The tracker is stateful and each connected /video client renders frames on
+# its own thread, so all tracker access is serialized; the timestamp lets
+# /status report None instead of a value frozen since the last viewer left.
+_grid_lateral = None
+_grid_lateral_ts = 0.0
+_grid_lock = threading.Lock()
+
+# Optional 2x2 debug montage: annotated camera + yellow / white lane masks and
+# the circle-grid leader detection, same panels as the real follower server.
 _SHOW_MASKS = True
 _PANEL_SIZE = (320, 240)
 _STREAM_QUALITY = 60
-_ROUTE = []
-_STOP_IDS = set()
-_SLOW_IDS = set()
 try:
     import yaml as _yaml
     from tasks.visual_lane_servoing.packages.visual_servoing_activity import detect_lane_markings
-    from tasks.project.packages.red_line import RedLineDetector
-    _red_detector = RedLineDetector()
+    from tasks.project.packages.marker_grid import MarkerGridTracker
     try:
         with open(_CONFIG_FILE) as _cf:
-            _lcfg = _yaml.safe_load(_cf) or {}
-        _ROUTE    = [str(s).lower() for s in (_lcfg.get('route') or [])]
-        _STOP_IDS = {int(i) for i in (_lcfg.get('apriltag_stop_ids') or [])}
-        _SLOW_IDS = {int(i) for i in (_lcfg.get('apriltag_slow_ids') or [])}
+            _fcfg = _yaml.safe_load(_cf) or {}
+        for _k in _LEADER_CFG:
+            if _fcfg.get(_k) is not None:
+                _LEADER_CFG[_k] = float(_fcfg[_k])
     except Exception:
-        pass
+        _fcfg = {}
+    _grid_tracker = MarkerGridTracker(cfg=_fcfg)
     _MASKS_AVAILABLE = True
 except Exception as _mask_err:
-    print(f'[lead sim] mask preview disabled: {_mask_err}')
+    print(f'[follow sim] mask preview disabled: {_mask_err}')
     _MASKS_AVAILABLE = False
 
 
@@ -75,6 +84,31 @@ def _mask_to_bgr(mask, color, label):
     return out
 
 
+def _grid_panel(panel):
+    global _grid_lateral, _grid_lateral_ts
+    vis = panel.copy()
+    try:
+        with _grid_lock:
+            obs = _grid_tracker.update(panel)
+            if obs is not None:
+                w = panel.shape[1]
+                _grid_lateral = round(float(obs.midpoint[0] - w / 2.0) / (w / 2.0), 2)
+            else:
+                _grid_lateral = None
+            _grid_lateral_ts = time.time()
+        if obs is not None:
+            x1, y1, x2, y2 = obs.bbox
+            cv2.rectangle(vis, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
+            cx, cy = obs.midpoint
+            cv2.circle(vis, (int(cx), int(cy)), 4, (0, 0, 255), -1)
+    except Exception:
+        with _grid_lock:
+            _grid_lateral = None
+            _grid_lateral_ts = time.time()
+    cv2.putText(vis, 'GRID (leader)', (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 1)
+    return vis
+
+
 def _montage(frame_bgr):
     panel = cv2.resize(frame_bgr, _PANEL_SIZE, interpolation=cv2.INTER_AREA)
     cam = visualize(panel)
@@ -83,14 +117,10 @@ def _montage(frame_bgr):
         m_yellow, m_white = detect_lane_markings(panel)
     except Exception:
         m_yellow = m_white = z
-    try:
-        m_red = (_red_detector._red_mask(panel) > 0).astype(np.uint8)
-    except Exception:
-        m_red = z
     yellow = _mask_to_bgr(m_yellow, (0, 255, 255), 'YELLOW centerline')
     white  = _mask_to_bgr(m_white,  (255, 255, 255), 'WHITE edge')
-    red    = _mask_to_bgr(m_red,    (0, 0, 255),     'RED stop-line')
-    return cv2.vconcat([cv2.hconcat([cam, yellow]), cv2.hconcat([white, red])])
+    grid   = _grid_panel(panel)
+    return cv2.vconcat([cv2.hconcat([cam, yellow]), cv2.hconcat([white, grid])])
 
 
 def visualize(frame_bgr):
@@ -111,18 +141,17 @@ def visualize(frame_bgr):
                          f"Steer: {info.get('steering', 0.0):+.2f}", (10, 50), font, 0.5, (0, 255, 0), 1)
     cv2.putText(display, f"L: {info.get('left_speed', 0.0):+.2f}  "
                          f"R: {info.get('right_speed', 0.0):+.2f}", (10, 70), font, 0.5, (0, 255, 0), 1)
-    cv2.putText(display, f"Route: {info.get('route_idx', 0)}", (10, 90), font, 0.5, (0, 255, 0), 1)
 
-    rl = info.get('red_line')
-    if rl:
-        cv2.putText(display, f"RedLine: w={rl[0]} d={rl[1]}", (10, h - 60), font, 0.5, (0, 0, 255), 1)
-    tag_ids = info.get('apriltag_ids', [])
-    if tag_ids:
-        parts = []
-        for t in tag_ids:
-            kind = 'STOP' if t in _STOP_IDS else ('SLOW' if t in _SLOW_IDS else '?')
-            parts.append(f'{t}={kind}')
-        cv2.putText(display, 'TAGS: ' + '  '.join(parts), (10, h - 38), font, 0.55, (0, 255, 255), 2)
+    src = info.get('leader_source')
+    if src:
+        span = info.get('led_pair_px')
+        text = f'Leader: {src}'
+        if span:
+            text += f' (span={span}px)'
+        hdg = info.get('grid_heading')
+        if hdg is not None:
+            text += f' hdg={hdg}'
+        cv2.putText(display, text, (10, h - 40), font, 0.5, (255, 255, 0), 1)
     cv2.putText(display, f"{info.get('fps', 0.0):.1f} FPS", (w - 100, 25), font, 0.5, (200, 200, 200), 1)
     return display
 
@@ -153,9 +182,8 @@ def _agent_alive():
 
 
 def _start_agent():
-    """Start the lead agent thread. Sim has no LED hardware and no wheel
-    encoders; the agent handles leds=None (LED commands no-op) and
-    encoders=None (turns fall back to lane-reacquire + timeout)."""
+    """Start the follower agent thread (sim has no LEDs -> leds=None; the
+    follower takes no encoders)."""
     global _agent_thread
     with _agent_lock:
         if _agent_alive():
@@ -164,9 +192,8 @@ def _start_agent():
         _agent_thread = threading.Thread(
             target=agent.main,
             args=(camera, wheels, None, stop_event, _frame_queue, _debug_info_lock, _debug_info),
-            kwargs={'encoders': None},
             daemon=True,
-            name='LeadAgentThread',
+            name='FollowAgentThread',
         )
         _agent_thread.start()
         return True
@@ -217,12 +244,15 @@ def status():
         }
     with _debug_info_lock:
         info = dict(_debug_info)
+    with _grid_lock:
+        fresh = (time.time() - _grid_lateral_ts) < 1.0
+        info['grid_lateral'] = _grid_lateral if fresh else None
     return jsonify({
         'agent': info,
         'agent_running': running,
         'pose': pose,
         'game': game,
-        'route': _ROUTE,
+        'leader_cfg': _LEADER_CFG,
     })
 
 
@@ -282,7 +312,10 @@ def agent_stop():
 
 @app.route('/reset', methods=['POST'])
 def reset():
-    """Respawn the robot in Godot and restart the agent with a fresh FSM."""
+    """Respawn the robot in Godot and restart the agent with a fresh FSM.
+    The Godot reset also re-parks the NPC leader at the start of its loop,
+    so the follower re-arms with the same geometry as a fresh boot."""
+    global _grid_lateral
     _, stopped = _stop_agent()
     if not stopped:
         return jsonify(status='error', message='agent is busy stopping; try again in a few seconds')
@@ -290,6 +323,8 @@ def reset():
         wheels.reset_game()
     with _debug_info_lock:
         _debug_info.clear()
+    with _grid_lock:
+        _grid_lateral = None
     time.sleep(0.2)
     if wheels is not None:
         # Drop state pushed before the respawn so /status can't serve a
@@ -313,7 +348,7 @@ def shutdown():
 def main():
     global camera, wheels
 
-    ap = argparse.ArgumentParser(description='Project Lead Server — Godot Simulation')
+    ap = argparse.ArgumentParser(description='Project Follow Server — Godot Simulation')
     ap.add_argument('--port',       type=int, default=5000)
     ap.add_argument('--frame-port', type=int, default=5001)
     ap.add_argument('--wheel-port', type=int, default=5002)
@@ -322,7 +357,7 @@ def main():
 
     suppress_http_logs()
     print('=' * 60)
-    print('PROJECT LEAD SERVER — GODOT SIMULATION')
+    print('PROJECT FOLLOW SERVER — GODOT SIMULATION')
     print('=' * 60)
 
     print('\n[1/3] Initializing wheels (Godot)...')
@@ -335,7 +370,7 @@ def main():
     camera = GodotCameraDriver(godot_config=GodotCameraConfig(host='0.0.0.0', port=args.frame_port))
     camera.start()
 
-    print('\n[3/3] Starting lead agent...')
+    print('\n[3/3] Starting follower agent...')
     _start_agent()
     print('  agent.main() running')
 

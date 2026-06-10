@@ -18,7 +18,10 @@ GODOT_SCENES = {
     'modcon': 'res://scenes/maps/Modconpath.tscn',
     'navigator': 'res://scenes/maps/map_follower.tscn',
     'object_detection': 'res://scenes/maps/lane_detect.tscn',
-    'project_lead': 'res://scenes/maps/project.tscn',
+    # Digital twin of the physical KIU track; the follow variant adds a
+    # path-driven NPC leader carrying the circle-grid back marker.
+    'project_lead': 'res://scenes/maps/test1_actual_map_kiu.tscn',
+    'project_follow': 'res://scenes/maps/test1_actual_map_kiu_follow.tscn',
 }
 
 DEFAULT_WEB_PORT = 5000

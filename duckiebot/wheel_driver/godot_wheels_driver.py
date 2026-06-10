@@ -39,6 +39,11 @@ class GameState:
     distance_traveled: float = 0.0
     distance_from_start: float = 0.0
     collision_duck: str = ""
+    # Robot pose, pushed by newer Godot builds inside the periodic "state"
+    # message; None until the first one arrives (or with older builds).
+    pose_x: Optional[float] = None
+    pose_z: Optional[float] = None
+    heading_rad: Optional[float] = None
 
 
 class GodotWheelTransport:
@@ -48,6 +53,9 @@ class GodotWheelTransport:
         self._sock: Optional[socket.socket] = None
         self._last_connect_attempt: float = 0.0
         self._recv_buffer: bytes = b""
+        # The agent thread (send_wheels) and server threads (is_game_over for
+        # pose/game polling) share this socket; serialize all I/O on it.
+        self._io_lock = threading.Lock()
 
         self.game_state = GameState()
         self._on_game_over: Optional[Callable[[GameState], None]] = None
@@ -100,6 +108,10 @@ class GodotWheelTransport:
             # Read available data
             chunk = self._sock.recv(4096)
             if not chunk:
+                # Peer closed the connection: drop the socket so
+                # _ensure_connected can reconnect (a read-only consumer
+                # would otherwise hold the dead socket forever).
+                self.close()
                 return
             self._recv_buffer += chunk
 
@@ -151,87 +163,109 @@ class GodotWheelTransport:
                     self._on_game_over(self.game_state)
 
             elif msg_type == "state":
+                def _opt_float(key):
+                    v = msg.get(key)
+                    return None if v is None else float(v)
+
                 self.game_state = GameState(
                     game_over=bool(msg.get("game_over", False)),
                     survival_time=float(msg.get("survival_time", 0)),
                     distance_traveled=float(msg.get("total_distance", 0)),
                     distance_from_start=float(msg.get("distance_from_start", 0)),
                     collision_duck=str(msg.get("collision_duck", "")),
+                    pose_x=_opt_float("pose_x"),
+                    pose_z=_opt_float("pose_z"),
+                    heading_rad=_opt_float("heading_rad"),
                 )
 
         except Exception as e:
             print(f"[GodotWheelTransport] Error handling message: {e}")
 
     def send_wheels(self, left: float, right: float) -> None:
-        # Check for incoming messages first
-        self._check_incoming()
+        with self._io_lock:
+            # Check for incoming messages first
+            self._check_incoming()
 
-        if not self._ensure_connected():
-            return
+            if not self._ensure_connected():
+                return
 
-        msg = {"type": "wheels", "left": float(left), "right": float(right), "ts": float(time.time())}
-        payload = json.dumps(msg).encode("utf-8")
-        header = struct.pack("!I", len(payload))
+            msg = {"type": "wheels", "left": float(left), "right": float(right), "ts": float(time.time())}
+            payload = json.dumps(msg).encode("utf-8")
+            header = struct.pack("!I", len(payload))
 
-        try:
-            assert self._sock is not None
-            self._sock.sendall(header + payload)
-        except Exception as e:
-            print(f"[GodotWheelTransport] Send failed: {e}")
-            self.close()
+            try:
+                assert self._sock is not None
+                self._sock.sendall(header + payload)
+            except Exception as e:
+                print(f"[GodotWheelTransport] Send failed: {e}")
+                self.close()
 
     def send_reset(self) -> None:
-        if not self._ensure_connected():
-            return
+        with self._io_lock:
+            if not self._ensure_connected():
+                return
 
-        msg = {"type": "reset"}
-        payload = json.dumps(msg).encode("utf-8")
-        header = struct.pack("!I", len(payload))
+            msg = {"type": "reset"}
+            payload = json.dumps(msg).encode("utf-8")
+            header = struct.pack("!I", len(payload))
 
-        try:
-            assert self._sock is not None
-            self._sock.sendall(header + payload)
-            self.game_state = GameState()  # Reset local state
-            print("[GodotWheelTransport] Sent reset command")
-        except Exception as e:
-            print(f"[GodotWheelTransport] Reset send failed: {e}")
-            self.close()
+            try:
+                assert self._sock is not None
+                self._sock.sendall(header + payload)
+                self.game_state = GameState()  # Reset local state
+                print("[GodotWheelTransport] Sent reset command")
+            except Exception as e:
+                print(f"[GodotWheelTransport] Reset send failed: {e}")
+                self.close()
 
     def send_remove_objects(self, name_filter: str) -> None:
-        if not self._ensure_connected():
-            return
+        with self._io_lock:
+            if not self._ensure_connected():
+                return
 
-        msg = {"type": "remove_objects", "filter": name_filter}
-        payload = json.dumps(msg).encode("utf-8")
-        header = struct.pack("!I", len(payload))
+            msg = {"type": "remove_objects", "filter": name_filter}
+            payload = json.dumps(msg).encode("utf-8")
+            header = struct.pack("!I", len(payload))
 
-        try:
-            assert self._sock is not None
-            self._sock.sendall(header + payload)
-            print(f"[GodotWheelTransport] Sent remove_objects filter={name_filter!r}")
-        except Exception as e:
-            print(f"[GodotWheelTransport] remove_objects send failed: {e}")
-            self.close()
+            try:
+                assert self._sock is not None
+                self._sock.sendall(header + payload)
+                print(f"[GodotWheelTransport] Sent remove_objects filter={name_filter!r}")
+            except Exception as e:
+                print(f"[GodotWheelTransport] remove_objects send failed: {e}")
+                self.close()
 
     def send_change_scene(self, scene_path: str) -> None:
-        if not self._ensure_connected():
-            return
+        with self._io_lock:
+            if not self._ensure_connected():
+                return
 
-        msg = {"type": "change_scene", "scene": scene_path}
-        payload = json.dumps(msg).encode("utf-8")
-        header = struct.pack("!I", len(payload))
+            msg = {"type": "change_scene", "scene": scene_path}
+            payload = json.dumps(msg).encode("utf-8")
+            header = struct.pack("!I", len(payload))
 
-        try:
-            assert self._sock is not None
-            self._sock.sendall(header + payload)
-            print(f"[GodotWheelTransport] Sent change_scene path={scene_path!r}")
-        except Exception as e:
-            print(f"[GodotWheelTransport] change_scene send failed: {e}")
-            self.close()
+            try:
+                assert self._sock is not None
+                self._sock.sendall(header + payload)
+                print(f"[GodotWheelTransport] Sent change_scene path={scene_path!r}")
+            except Exception as e:
+                print(f"[GodotWheelTransport] change_scene send failed: {e}")
+                self.close()
 
     def is_game_over(self) -> bool:
-        self._check_incoming()
+        with self._io_lock:
+            self._check_incoming()
+            if self._sock is None:
+                self._ensure_connected()
         return self.game_state.game_over
+
+    def clear_state(self) -> None:
+        """Drain anything Godot already pushed, then forget it. Used after a
+        game reset so state generated before the respawn (old pose, stale
+        game_over) can never be served afterwards."""
+        with self._io_lock:
+            self._check_incoming()
+            self.game_state = GameState()
 
 
 class GodotWheelsDriver(WheelsDriverAbs):
@@ -285,6 +319,9 @@ class GodotWheelsDriver(WheelsDriverAbs):
 
     def reset_game(self) -> None:
         self.transport.send_reset()
+
+    def clear_state(self) -> None:
+        self.transport.clear_state()
 
     def remove_objects(self, name_filter: str) -> None:
         self.transport.send_remove_objects(name_filter)
