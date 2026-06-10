@@ -55,6 +55,18 @@ class MarkerGridTracker:
         self.roi_pad_px = int(cfg.get("grid_roi_pad_px", 60))
         self.lost_grace = int(cfg.get("grid_lost_grace_frames", 6))
         self.use_clustering = bool(cfg.get("grid_use_clustering", False))
+        # The ROI is small, so search it at full resolution: dots stay above
+        # the blob detector's min area out to roughly twice the range of the
+        # downscaled search (key for re-finding the leader after a corner).
+        self.roi_downscale = float(cfg.get("grid_roi_downscale", 1.0))
+        # When fully lost, additionally search a full-res horizontal band
+        # where a *distant* leader appears (near the horizon). Costs about as
+        # much as the downscaled full-frame search and extends re-acquisition
+        # range to ~2x; the downscaled full-frame pass still covers a close
+        # leader (whose dots are too big to need full res).
+        self.far_search = bool(cfg.get("grid_far_search", True))
+        self.far_top_frac = float(cfg.get("grid_far_band_top_frac", 0.10))
+        self.far_bot_frac = float(cfg.get("grid_far_band_bot_frac", 0.45))
 
         flags = cv2.CALIB_CB_SYMMETRIC_GRID
         if self.use_clustering:
@@ -82,9 +94,10 @@ class MarkerGridTracker:
             return None  # findCirclesGrid will fall back to its internal detector
 
     # --- core detection on a (possibly cropped) gray region --------------------
-    def _find_in(self, gray_region: np.ndarray, ox: int, oy: int) -> Optional[np.ndarray]:
+    def _find_in(self, gray_region: np.ndarray, ox: int, oy: int,
+                 scale: Optional[float] = None) -> Optional[np.ndarray]:
         """Run findCirclesGrid on a region; return Nx2 full-frame centres or None."""
-        s = self.downscale
+        s = self.downscale if scale is None else scale
         small = cv2.resize(gray_region, None, fx=s, fy=s, interpolation=cv2.INTER_AREA) if s != 1.0 else gray_region
         try:
             if self._blob is not None:
@@ -150,11 +163,20 @@ class MarkerGridTracker:
             rx2 = min(w, x2 + self.roi_pad_px)
             ry2 = min(h, y2 + self.roi_pad_px)
             if rx2 - rx1 > 10 and ry2 - ry1 > 10:
-                pts = self._find_in(gray[ry1:ry2, rx1:rx2], rx1, ry1)
+                pts = self._find_in(gray[ry1:ry2, rx1:rx2], rx1, ry1,
+                                    scale=self.roi_downscale)
 
-        # 2) Full-frame fallback.
+        # 2) Full-frame fallback (downscaled: catches a close leader).
         if pts is None:
             pts = self._find_in(gray, 0, 0)
+
+        # 3) Far-band fallback at full resolution: a distant leader's dots are
+        # below the blob detector's min area in the downscaled pass.
+        if pts is None and self.far_search and self._last is None:
+            by1 = int(h * self.far_top_frac)
+            by2 = int(h * self.far_bot_frac)
+            if by2 - by1 > 10:
+                pts = self._find_in(gray[by1:by2, :], 0, by1, scale=1.0)
 
         if pts is not None and len(pts) == self.n_points:
             obs = self._obs_from_points(pts)
@@ -162,7 +184,7 @@ class MarkerGridTracker:
             self._missed = 0
             return obs
 
-        # 3) Grace: reuse last estimate briefly so single-frame misses don't drop the lock.
+        # 4) Grace: reuse last estimate briefly so single-frame misses don't drop the lock.
         if self._last is not None:
             self._missed += 1
             if self._missed <= self.lost_grace:
