@@ -33,8 +33,12 @@ _MANEUVER_STEPS = ("left", "right", "straight")
 
 
 class LeadFSM:
-    def __init__(self, cfg: Optional[dict] = None):
+    def __init__(self, cfg: Optional[dict] = None, navigator=None):
         cfg = cfg or {}
+        # Optional map-aware navigator: when set and a pose is passed to
+        # step(), it chooses the maneuver at each intersection instead of the
+        # fixed route list (which remains the fallback).
+        self.navigator = navigator
         self.cruise_speed = float(cfg.get("cruise_speed", 0.3))
         self.slow_factor  = float(cfg.get("slow_factor", 0.5))
         self.stop_duration = float(cfg.get("stop_duration", 1.0))
@@ -97,7 +101,8 @@ class LeadFSM:
 
     # --- public ---------------------------------------------------------------
     def step(self, wm: WorldModel, turn_yaw_rad: Optional[float] = None,
-             fwd_dist_m: Optional[float] = None) -> Decision:
+             fwd_dist_m: Optional[float] = None,
+             pose: Optional[tuple] = None) -> Decision:
         self.request_lane_reset = False
         t = wm.t
         self._update_latch(wm)
@@ -126,11 +131,17 @@ class LeadFSM:
             return self._decide(STATE_SLOW_AFTER, self.cruise_speed * self.slow_after_factor,
                                 wm.lane.steering_suggestion, YELLOW)
 
-        # 4) intersection event -> consume the next route step
+        # 4) intersection event -> choose the next step: the map-aware
+        #    navigator decides from the live pose when available, otherwise
+        #    consume the fixed route list.
         if self._intersection_fires(wm):
             self._consumed = True
             self._red_clear = 0
-            step = self.route[self.route_idx] if self.route_idx < len(self.route) else "stop"
+            step = None
+            if self.navigator is not None and pose is not None:
+                step = self.navigator.next_step(*pose)
+            if step is None:
+                step = self.route[self.route_idx] if self.route_idx < len(self.route) else "stop"
             self.route_idx += 1
             self.last_step = step
             if self._sign_pending:

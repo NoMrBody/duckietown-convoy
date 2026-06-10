@@ -13,9 +13,18 @@ stop_duration: 1.0          # halt this long at a STOP sign / intersection
 slow_duration: 1.5
 slow_cooldown: 3.0
 
+# --- route ---
+# fixed: follow the route list below (one step per red-line intersection).
+# auto:  pick a valid turn at each intersection from the map + live pose
+#        (sim only; the real robot has no pose and falls back to the list).
+route_mode: fixed
+auto_seed: null
+
 # --- fixed route ---
 # Steps consumed one-per-intersection (each red-line event). Tokens:
 #   straight | right | left | stop   (stop = final, latched halt)
+# Valid from the sim spawn: eastbound on the middle corridor, west of the
+# 4-way (the scene's DuckieBot start pose).
 route: [straight, straight, straight, left, right]
 
 # --- maneuver shape / timing (FIELD-TUNE) ---

@@ -164,16 +164,24 @@ function updateAgentPanel(d) {
 
 function updateLeadPanel(d, a) {
     const row = document.getElementById('route-row');
-    const route = d.route || [];
     const idx = a.route_idx || 0;
     row.innerHTML = '';
-    route.forEach((step, i) => {
+    if (d.route_mode === 'auto') {
         const chip = document.createElement('span');
-        chip.className = 'route-chip' + (i < idx ? ' done' : (i === idx ? ' current' : ''));
-        chip.textContent = ROUTE_GLYPHS[step] || step;
-        chip.title = step;
+        chip.className = 'route-chip current';
+        chip.textContent = 'AUTO \\u00b7 ' + idx +
+            (a.route_step ? ' \\u00b7 last ' + (ROUTE_GLYPHS[a.route_step] || a.route_step) : '');
+        chip.title = 'turns chosen from the map; ' + idx + ' intersections so far';
         row.appendChild(chip);
-    });
+    } else {
+        (d.route || []).forEach((step, i) => {
+            const chip = document.createElement('span');
+            chip.className = 'route-chip' + (i < idx ? ' done' : (i === idx ? ' current' : ''));
+            chip.textContent = ROUTE_GLYPHS[step] || step;
+            chip.title = step;
+            row.appendChild(chip);
+        });
+    }
     const rl = a.red_line;
     setText('kv-redline', rl ? ('width ' + rl[0].toFixed(2) + ' \\u00b7 near ' + rl[1].toFixed(2)) : 'not seen');
     const tags = a.apriltag_ids || [];

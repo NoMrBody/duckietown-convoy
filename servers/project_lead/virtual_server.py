@@ -47,6 +47,7 @@ _SHOW_MASKS = True
 _PANEL_SIZE = (320, 240)
 _STREAM_QUALITY = 60
 _ROUTE = []
+_ROUTE_MODE = 'fixed'
 _STOP_IDS = set()
 _SLOW_IDS = set()
 try:
@@ -57,7 +58,8 @@ try:
     try:
         with open(_CONFIG_FILE) as _cf:
             _lcfg = _yaml.safe_load(_cf) or {}
-        _ROUTE    = [str(s).lower() for s in (_lcfg.get('route') or [])]
+        _ROUTE      = [str(s).lower() for s in (_lcfg.get('route') or [])]
+        _ROUTE_MODE = str(_lcfg.get('route_mode', 'fixed')).lower()
         _STOP_IDS = {int(i) for i in (_lcfg.get('apriltag_stop_ids') or [])}
         _SLOW_IDS = {int(i) for i in (_lcfg.get('apriltag_slow_ids') or [])}
     except Exception:
@@ -223,6 +225,7 @@ def status():
         'pose': pose,
         'game': game,
         'route': _ROUTE,
+        'route_mode': _ROUTE_MODE,
     })
 
 

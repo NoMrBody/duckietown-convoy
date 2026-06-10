@@ -1,3 +1,4 @@
+import math
 import os
 import time
 
@@ -32,7 +33,23 @@ def main(camera, wheels, leds, stop_event,
     except Exception as e:
         print(f"[lead] perception init failed: {e!r} — streaming camera only, no control")
         perception = None
-    fsm = LeadFSM(cfg)
+
+    # route_mode auto: decide turns at intersections from the map + live sim
+    # pose instead of the fixed route list. Anything missing (no Godot scene,
+    # no pose — e.g. on the real robot) falls back to the fixed route.
+    navigator = None
+    if str(cfg.get("route_mode", "fixed")).lower() == "auto":
+        try:
+            from tasks.project_lead.packages.navigator import TopoNavigator, load_sim_map
+            map_data = load_sim_map()
+            if map_data and map_data.get("tiles"):
+                navigator = TopoNavigator(map_data, seed=cfg.get("auto_seed"))
+                print("[lead] auto navigation: choosing turns from the map at intersections")
+            else:
+                print("[lead] route_mode=auto but no map available — using the fixed route")
+        except Exception as e:
+            print(f"[lead] auto navigation unavailable ({e!r}) — using the fixed route")
+    fsm = LeadFSM(cfg, navigator=navigator)
     baseline = float(cfg.get("wheel_baseline_m", 0.1))
 
     last_state = None
@@ -42,6 +59,7 @@ def main(camera, wheels, leds, stop_event,
     frame_count = 0
     fps = 0.0
     in_maneuver = False
+    man_pose0 = None   # pose at maneuver entry (sim pose-odometry fallback)
     cam_fail = 0
 
     try:
@@ -91,35 +109,52 @@ def main(camera, wheels, leds, stop_event,
             try:
                 wm = perception.update(frame, now)
 
-                # Encoder odometry closes the loop on maneuvers when available:
-                # yaw for turns, forward distance for straight crosses. None on
-                # either falls back to lane-reacquisition + timeout in the FSM.
+                # Live pose (sim only: pushed by Godot over the wheel channel)
+                # feeds the auto navigator and pose-odometry; None on the real
+                # robot.
+                pose = None
+                gs = getattr(wheels, "game_state", None)
+                if gs is not None and getattr(gs, "pose_x", None) is not None:
+                    pose = (gs.pose_x, gs.pose_z, gs.heading_rad)
+
+                # Odometry closes the loop on maneuvers: yaw for turns, forward
+                # distance for straight crosses. Encoders on the real robot; in
+                # sim the Godot pose provides the same signals (the timed turn
+                # parameters are field-tuned and pirouette at sim wheel speeds).
+                # None on both falls back to lane-reacquisition + timeout.
                 turn_yaw = None
                 fwd_dist = None
-                if encoders is not None and in_maneuver:
-                    try:
-                        dl = encoders.left.distance_m()
-                        dr = encoders.right.distance_m()
-                        turn_yaw = (dr - dl) / max(baseline, 1e-3)
-                        fwd_dist = 0.5 * (dl + dr)
-                    except Exception:
-                        turn_yaw = None
-                        fwd_dist = None
+                if in_maneuver:
+                    if encoders is not None:
+                        try:
+                            dl = encoders.left.distance_m()
+                            dr = encoders.right.distance_m()
+                            turn_yaw = (dr - dl) / max(baseline, 1e-3)
+                            fwd_dist = 0.5 * (dl + dr)
+                        except Exception:
+                            turn_yaw = None
+                            fwd_dist = None
+                    elif pose is not None and man_pose0 is not None:
+                        dth = pose[2] - man_pose0[2]
+                        turn_yaw = math.atan2(math.sin(dth), math.cos(dth))
+                        fwd_dist = math.hypot(pose[0] - man_pose0[0], pose[1] - man_pose0[1])
 
-                decision = fsm.step(wm, turn_yaw_rad=turn_yaw, fwd_dist_m=fwd_dist)
+                decision = fsm.step(wm, turn_yaw_rad=turn_yaw, fwd_dist_m=fwd_dist, pose=pose)
                 if fsm.request_lane_reset:
                     perception.reset_lane()
 
                 left, right = motors_from_decision(decision)
 
-                # Reset encoders at maneuver entry so yaw integrates from zero.
+                # Reset odometry at maneuver entry so yaw integrates from zero.
                 is_man = decision.state_name in _MANEUVER_STATES
-                if is_man and not in_maneuver and encoders is not None:
-                    try:
-                        encoders.reset()
-                        encoders.set_directions(True, True)
-                    except Exception:
-                        pass
+                if is_man and not in_maneuver:
+                    man_pose0 = pose
+                    if encoders is not None:
+                        try:
+                            encoders.reset()
+                            encoders.set_directions(True, True)
+                        except Exception:
+                            pass
                 in_maneuver = is_man
 
                 if debug_lock is not None and debug_dict is not None:
@@ -134,6 +169,7 @@ def main(camera, wheels, leds, stop_event,
                             'apriltag_ids': dbg.get('apriltag_ids', []),
                             'red_line': dbg.get('red_line'),
                             'route_idx': fsm.route_idx,
+                            'route_step': fsm.last_step,
                             'fps': fps,
                         })
 
