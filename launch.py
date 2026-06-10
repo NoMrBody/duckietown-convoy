@@ -198,6 +198,11 @@ def launch_godot(godot_path=None, debug=False, camera_port=None, wheel_port_hint
     else:
         godot_cmd = [godot_path, '--path', GODOT_PROJECT, godot_scene]
 
+    # Keep the window unoccluded: macOS throttles covered windows' rendering,
+    # which freezes the camera stream while physics keeps running — the bot
+    # then drives blind on a stale frame (looks like random divergence).
+    godot_cmd.append('--always-on-top')
+
     if camera_port is not None or wheel_port_hint is not None or port_file_path is not None:
         godot_cmd.append('--')
         if camera_port is not None:
