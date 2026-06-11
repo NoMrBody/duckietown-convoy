@@ -22,6 +22,7 @@ from tasks.project.packages.world_model import WorldModel
 
 STATE_LANE       = "LANE_FOLLOW"
 STATE_CURVE      = "CURVE"
+STATE_LOST       = "LANE_LOST"
 STATE_STOP       = "STOP_AT_SIGN"
 STATE_SLOW       = "SLOW_ZONE"
 STATE_CROSS      = "CROSS_STRAIGHT"
@@ -110,6 +111,11 @@ class LeadFSM:
         # flickers frame to frame.
         self.curve_hold_s = float(cfg.get("curve_hold_s", 0.4))
 
+        # Halt when the lane has been unhealthy this long while cruising:
+        # without it the bot keeps driving blind at cruise speed straight off
+        # the road (maneuvers are exempt — they are odometry/timer bound).
+        self.lane_lost_stop_s = float(cfg.get("lane_lost_stop_s", 2.0))
+
         # mutable state
         self.route_idx = 0
         self._curve_until = -1.0
@@ -125,6 +131,7 @@ class LeadFSM:
         self._consumed = False
         self._red_clear = 0
         self._done = False
+        self._last_lane_ok = None
 
         # surfaced for the agent/debug
         self.request_lane_reset = False
@@ -190,12 +197,20 @@ class LeadFSM:
                 return self._decide(STATE_DONE, 0.0, 0.0, RED)
             return self._run_maneuver(wm, t, turn_yaw_rad, fwd_dist_m, odo_source)
 
-        # 5) slow zone (timed)
+        # 5) lane lost while cruising: hold position instead of driving blind.
+        #    The clock starts at the first step so a markings-free spawn frame
+        #    doesn't trip it, and resets whenever the lane is healthy.
+        if self._last_lane_ok is None or wm.lane.healthy:
+            self._last_lane_ok = t
+        if t - self._last_lane_ok > self.lane_lost_stop_s:
+            return self._decide(STATE_LOST, 0.0, 0.0, RED)
+
+        # 6) slow zone (timed)
         if t < self._slow_until:
             return self._decide(STATE_SLOW, self.cruise_speed * self.slow_factor,
                                 wm.lane.steering_suggestion, YELLOW)
 
-        # 6) curve approach: the detector is vision-based (lane-marking
+        # 7) curve approach: the detector is vision-based (lane-marking
         #    spread), so it fires while the bend is still ahead — slow into
         #    and through it as a dedicated state. Held briefly so a
         #    flickering detection doesn't flap the state.
@@ -206,7 +221,7 @@ class LeadFSM:
             factor = min(self.curve_speed_factor, self._steer_factor(steer))
             return self._decide(STATE_CURVE, self.cruise_speed * factor, steer, YELLOW)
 
-        # 7) default: lane following; speed still scales with steering demand
+        # 8) default: lane following; speed still scales with steering demand
         #    (reacquire wobbles and the like).
         return self._decide(STATE_LANE, self.cruise_speed * self._steer_factor(steer),
                             steer, GREEN)
