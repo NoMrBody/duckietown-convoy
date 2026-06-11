@@ -18,7 +18,8 @@ from duckiebot.wheel_driver import DaguWheelsDriver
 from duckiebot.wheel_driver.wheels_driver_abs import WheelPWMConfiguration
 from duckiebot.led_driver import LEDDriver
 from launcher.ports import find_available_port
-from servers.common import shutdown_cleanup, suppress_http_logs, update_yaml_values
+from servers.common import (handle_hsv_tuning, shutdown_cleanup, suppress_http_logs,
+                            update_yaml_values)
 
 import tasks.project_lead.packages.agent as agent
 
@@ -392,6 +393,12 @@ def sample():
 
 
 _LANE_CONFIG_FILE = os.path.normpath(os.path.join(project_root, 'config', 'lane_servoing_config.yaml'))
+_HSV_CONFIG_FILE  = os.path.normpath(os.path.join(project_root, 'config', 'lane_servoing_hsv_config.yaml'))
+
+
+@app.route('/hsv', methods=['GET', 'POST'])
+def hsv_tuning():
+    return jsonify(handle_hsv_tuning(request, _HSV_CONFIG_FILE))
 
 # UI tuning bounds: (min, max) — same as the sim server.
 _TUNE_BOUNDS = {'speed': (0.05, 0.6), 'kp': (0.0, 1.0), 'kd': (0.0, 2.0)}

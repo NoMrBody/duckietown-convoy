@@ -29,6 +29,42 @@ def update_yaml_values(path, updates):
         f.write(text)
 
 
+def handle_hsv_tuning(request, hsv_config_path):
+    """Shared GET/POST body for the /hsv route: read or live-update the lane
+    detector's HSV bounds. Updates apply to the running detector immediately
+    (the mask panels redraw with them on the next frame) and persist to the
+    YAML config so restarts keep them."""
+    from tasks.visual_lane_servoing.packages import visual_servoing_activity as student
+
+    if request.method == 'GET':
+        return dict(status='ok', **student.get_hsv_bounds())
+
+    body = request.get_json(silent=True) or {}
+    cur = student.get_hsv_bounds()
+    applied = {}
+    for key, val in body.items():
+        if key not in cur or val is None:
+            continue
+        try:
+            hi = 179 if key.endswith('_h') else 255
+            applied[key] = max(0, min(hi, int(round(float(val)))))
+        except (TypeError, ValueError):
+            return dict(status='error', message=f'bad value for {key}')
+    if not applied:
+        return dict(status='error', message='nothing to apply')
+
+    cur.update(applied)
+    student.set_hsv_bounds(
+        [cur['yellow_lower_h'], cur['yellow_lower_s'], cur['yellow_lower_v']],
+        [cur['yellow_upper_h'], cur['yellow_upper_s'], cur['yellow_upper_v']],
+        [cur['white_lower_h'],  cur['white_lower_s'],  cur['white_lower_v']],
+        [cur['white_upper_h'],  cur['white_upper_s'],  cur['white_upper_v']],
+    )
+    update_yaml_values(hsv_config_path, applied)
+    return dict(status='ok',
+                message='applied ' + ', '.join(f'{k}={v}' for k, v in sorted(applied.items())))
+
+
 class LatestFrame:
     """Single-slot frame holder: the newest frame always wins, never blocks
     and never fills up. Queue-compatible put_nowait so agents can treat it
