@@ -74,7 +74,20 @@ def _state_panel(task):
             <div class="kv"><span>Sim</span><b id="kv-game">&mdash;</b></div>'''
 
 
-def _content(task):
+def _content(task, sim=True):
+    run_card = ('''
+            <div class="card">
+                <div class="card-header">Simulation</div>
+                <button class="button" id="btn-agent" onclick="toggleAgent()">Pause agent</button>
+                <button class="button danger" onclick="resetSim()">Reset simulation</button>
+                <div class="status" id="sim-status"></div>
+            </div>''' if sim else '''
+            <div class="card">
+                <div class="card-header">Robot</div>
+                <button class="button" id="btn-agent" onclick="toggleAgent()">Pause agent</button>
+                <button class="button danger" onclick="resetSim()">Restart agent</button>
+                <div class="status" id="sim-status"></div>
+            </div>''')
     return f'''
     <div class="container">
         <div class="video-section">
@@ -95,13 +108,7 @@ def _content(task):
                 <div class="card-header">Track map <span class="state-badge" id="pose-source">no pose</span></div>
                 <canvas id="map-canvas"></canvas>
                 <div class="map-note" id="map-note"></div>
-            </div>
-            <div class="card">
-                <div class="card-header">Simulation</div>
-                <button class="button" id="btn-agent" onclick="toggleAgent()">Pause agent</button>
-                <button class="button danger" onclick="resetSim()">Reset simulation</button>
-                <div class="status" id="sim-status"></div>
-            </div>
+            </div>{run_card}
             <div class="card">
                 <div class="card-header">Tuning <span class="state-badge">live</span></div>
                 <div class="slider-group">
@@ -137,6 +144,7 @@ def _content(task):
 _JS_COMMON = '''
 const MAP = {{ map_json|safe }};
 const TASK = '__TASK__';
+const SIM = __SIM__;
 
 const STATE_COLORS = {
     LANE_FOLLOW: 'var(--accent-green)', FOLLOW: 'var(--accent-green)',
@@ -170,6 +178,7 @@ function updateAgentPanel(d) {
     const g = d.game || {};
     const gameEl = document.getElementById('kv-game');
     if (gameEl) {
+        gameEl.parentElement.style.display = Object.keys(g).length ? '' : 'none';
         if (g.game_over) {
             gameEl.textContent = 'GAME OVER' + (g.collision_duck ? ' (hit ' + g.collision_duck + ')' : '');
             gameEl.style.color = 'var(--accent-red)';
@@ -476,7 +485,8 @@ function onPose(p, lp) {
     if (!p) {
         srcEl.textContent = 'no pose';
         srcEl.style.color = 'var(--text-muted)';
-        setText('map-note', 'live pose unavailable \\u2014 waiting for Godot (circle = spawn)');
+        setText('map-note', SIM ? 'live pose unavailable \\u2014 waiting for Godot (circle = spawn)'
+                                : 'no localization on the real robot \\u2014 map for reference (circle = sim spawn)');
         return;
     }
     srcEl.textContent = 'live';
@@ -546,9 +556,10 @@ window.addEventListener('resize', () => { if (MAP_OK) setupMap(); });
 '''
 
 
-def get_template(task, title, subtitle):
-    """task: 'lead' or 'follow'. Returns a Jinja template string expecting
-    one variable: map_json (JSON string or 'null')."""
+def get_template(task, title, subtitle, sim=True):
+    """task: 'lead' or 'follow'. sim=False relabels the run controls for the
+    real robot (no Godot: /reset restarts the agent, pose stays null). Returns
+    a Jinja template string expecting one variable: map_json (JSON or 'null')."""
     assert task in ('lead', 'follow')
-    js = (_JS_COMMON + _JS_MAP).replace('__TASK__', task)
-    return render_template(title, subtitle, _content(task), extra_css=_EXTRA_CSS, extra_js=js)
+    js = (_JS_COMMON + _JS_MAP).replace('__TASK__', task).replace('__SIM__', 'true' if sim else 'false')
+    return render_template(title, subtitle, _content(task, sim=sim), extra_css=_EXTRA_CSS, extra_js=js)
