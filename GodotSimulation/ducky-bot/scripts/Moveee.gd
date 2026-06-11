@@ -125,12 +125,16 @@ func _on_duck_collision(duck_name: String) -> void:
 	wheel_server.set_game_over(survival_time, total_distance, distance_from_start)
 
 func get_game_state() -> Dictionary:
+	# heading_rad is the angle of the forward (-basis.z) vector: atan2(fwd_x, fwd_z).
 	return {
 		"game_over": game_over,
 		"survival_time": Time.get_unix_time_from_system() - start_time,
 		"total_distance": total_distance,
 		"distance_from_start": start_position.distance_to(global_position),
-		"collision_duck": collision_duck_name
+		"collision_duck": collision_duck_name,
+		"pose_x": global_position.x,
+		"pose_z": global_position.z,
+		"heading_rad": atan2(-global_transform.basis.z.x, -global_transform.basis.z.z)
 	}
 
 func reset_game() -> void:

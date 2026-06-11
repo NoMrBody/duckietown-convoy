@@ -14,6 +14,17 @@ var final_survival_time: float = 0.0
 var final_distance_traveled: float = 0.0
 var final_distance_from_start: float = 0.0
 
+# Push the state (incl. robot pose) to Python at this interval so the sim UI
+# can draw a live map without having to request it.
+const STATE_PUSH_INTERVAL_S: float = 0.1
+var _state_push_timer: float = 0.0
+
+# Outgoing frames queue here and drain with put_partial_data: a stalled or
+# absent Python reader must never block the main thread (put_data is the
+# blocking variant). Past the cap the reader is considered gone and dropped.
+const TX_BUFFER_CAP: int = 65536
+var _tx_buffer: PackedByteArray = PackedByteArray()
+
 func _ready() -> void:
 	var parent = get_parent()
 	var base_port: int = parent.WheelPort
@@ -67,21 +78,38 @@ func _send_game_over() -> void:
 		"distance_traveled": final_distance_traveled,
 		"distance_from_start": final_distance_from_start
 	}
-
-	var json_str = JSON.stringify(msg)
-	var payload = json_str.to_utf8_buffer()
-	var length = payload.size()
-
-	# Send length (big-endian) + payload
-	var len_bytes = PackedByteArray()
-	len_bytes.append((length >> 24) & 0xFF)
-	len_bytes.append((length >> 16) & 0xFF)
-	len_bytes.append((length >> 8) & 0xFF)
-	len_bytes.append(length & 0xFF)
-
-	peer.put_data(len_bytes)
-	peer.put_data(payload)
+	_queue_send(msg)
 	print("[WheelServer] Sent game_over to Python")
+
+func _queue_send(msg: Dictionary) -> void:
+	if peer == null:
+		return
+	if _tx_buffer.size() > TX_BUFFER_CAP:
+		print("[WheelServer] TX backlog (reader stalled); dropping client")
+		peer = null
+		left_cmd = 0.0
+		right_cmd = 0.0
+		_tx_buffer = PackedByteArray()
+		return
+	var payload: PackedByteArray = JSON.stringify(msg).to_utf8_buffer()
+	var length: int = payload.size()
+	var frame := PackedByteArray()
+	frame.append((length >> 24) & 0xFF)
+	frame.append((length >> 16) & 0xFF)
+	frame.append((length >> 8) & 0xFF)
+	frame.append(length & 0xFF)
+	frame.append_array(payload)
+	_tx_buffer.append_array(frame)
+
+func _drain_tx() -> void:
+	if peer == null or _tx_buffer.size() == 0:
+		return
+	var res: Array = peer.put_partial_data(_tx_buffer)
+	if int(res[0]) != OK:
+		return  # disconnects are handled by the status check in _process
+	var sent: int = int(res[1])
+	if sent > 0:
+		_tx_buffer = _tx_buffer.slice(sent)
 
 func _process(_delta: float) -> void:
 	# Accept client
@@ -96,13 +124,22 @@ func _process(_delta: float) -> void:
 
 	peer.poll()
 
+	_state_push_timer += _delta
+	if _state_push_timer >= STATE_PUSH_INTERVAL_S:
+		_state_push_timer = 0.0
+		_send_state()
+	_drain_tx()
+
 	# if socket closed, drop it
+	if peer == null:
+		return
 	var st: int = peer.get_status()
 	if st == StreamPeerTCP.STATUS_NONE or st == StreamPeerTCP.STATUS_ERROR:
 		print("[WheelServer] client disconnected (status=", st, ")")
 		peer = null
 		left_cmd = 0.0
 		right_cmd = 0.0
+		_tx_buffer = PackedByteArray()
 		return
 
 	# Read: uint32 length + JSON bytes
@@ -162,6 +199,9 @@ func _process(_delta: float) -> void:
 			if robot and robot.has_method("reset_game"):
 				robot.reset_game()
 				game_over = false
+				# No-op in scenes without an NPC leader; in the convoy follow
+				# scene it re-parks the leader ahead of the respawned follower.
+				get_tree().call_group("npc_leader", "reset_leader")
 				print("[WheelServer] Game reset by Python")
 
 		elif msg_type == "remove_objects":
@@ -203,6 +243,12 @@ func _send_state() -> void:
 
 	if robot and robot.has_method("get_game_state"):
 		state = robot.get_game_state()
+		if game_over:
+			# Keep the final stats frozen: get_game_state() computes
+			# survival_time from the clock, which keeps counting.
+			state["survival_time"] = final_survival_time
+			state["total_distance"] = final_distance_traveled
+			state["distance_from_start"] = final_distance_from_start
 	else:
 		state = {
 			"game_over": game_over,
@@ -211,17 +257,14 @@ func _send_state() -> void:
 			"distance_from_start": final_distance_from_start
 		}
 
+	# Include the NPC leader's pose when the scene has one (convoy follow
+	# scene), so the sim UI can draw it and the gap is measurable.
+	var npcs := get_tree().get_nodes_in_group("npc_leader")
+	if npcs.size() > 0:
+		var npc := npcs[0] as Node3D
+		if npc != null:
+			state["npc_x"] = npc.global_position.x
+			state["npc_z"] = npc.global_position.z
+
 	state["type"] = "state"
-
-	var json_str = JSON.stringify(state)
-	var payload = json_str.to_utf8_buffer()
-	var length = payload.size()
-
-	var len_bytes = PackedByteArray()
-	len_bytes.append((length >> 24) & 0xFF)
-	len_bytes.append((length >> 16) & 0xFF)
-	len_bytes.append((length >> 8) & 0xFF)
-	len_bytes.append(length & 0xFF)
-
-	peer.put_data(len_bytes)
-	peer.put_data(payload)
+	_queue_send(state)

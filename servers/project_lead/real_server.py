@@ -69,13 +69,29 @@ leds       = None
 encoders   = None
 stop_event = threading.Event()
 
-_frame_queue = queue.Queue(maxsize=2)
 _debug_info_lock = threading.Lock()
 _debug_info = {}
 
-# Latest raw camera frame (BGR), kept for the click-to-sample HSV tool.
-_latest_frame = None
-_latest_frame_lock = threading.Lock()
+
+class _LatestFrame:
+    """Single-slot frame holder: the newest frame always wins, never blocks and
+    never 'fills up'. Replaces the Queue so the stream shows the freshest frame
+    the agent produced and can't get wedged on an empty queue."""
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._frame = None
+
+    def put_nowait(self, frame):   # Queue-compatible name: the agent calls this
+        with self._lock:
+            self._frame = frame
+
+    def get_latest(self):
+        with self._lock:
+            return self._frame
+
+
+# No queue: the agent overwrites the single latest frame; the stream reads it.
+_frame_queue = _LatestFrame()
 
 # Display stream: downscale + lower JPEG quality so frames are ~4x smaller over
 # wifi (cuts latency), and always send the freshest frame (drain the queue).
@@ -89,10 +105,22 @@ _STREAM_QUALITY = 45        # JPEG quality [0..100] for the stream
 # pick up edits to lane_servoing_hsv_config.yaml.
 _SHOW_MASKS = True
 _PANEL_SIZE = (320, 240)    # (w, h) per panel
+# STOP/SLOW tag IDs from config, so the overlay can label each detected tag.
+_STOP_IDS = set()
+_SLOW_IDS = set()
 try:
+    import yaml as _yaml
     from tasks.visual_lane_servoing.packages.visual_servoing_activity import detect_lane_markings
     from tasks.project.packages.red_line import RedLineDetector
     _red_detector = RedLineDetector()
+    try:
+        with open(os.path.normpath(os.path.join(
+                os.path.dirname(__file__), "..", "..", "config", "project_lead_config.yaml"))) as _cf:
+            _lcfg = _yaml.safe_load(_cf) or {}
+        _STOP_IDS = {int(i) for i in (_lcfg.get("apriltag_stop_ids") or [])}
+        _SLOW_IDS = {int(i) for i in (_lcfg.get("apriltag_slow_ids") or [])}
+    except Exception:
+        pass
     _MASKS_AVAILABLE = True
 except Exception as _mask_err:
     print(f"[lead] mask preview disabled: {_mask_err}")
@@ -153,46 +181,43 @@ def visualize(frame_bgr):
                     font, 0.5, (0, 0, 255), 1)
     tag_ids = info.get('apriltag_ids', [])
     if tag_ids:
-        cv2.putText(display, f"Tags: {tag_ids}", (10, h - 40), font, 0.5, (255, 100, 255), 1)
+        parts = []
+        for t in tag_ids:
+            kind = "STOP" if t in _STOP_IDS else ("SLOW" if t in _SLOW_IDS else "?")
+            parts.append(f"{t}={kind}")
+        cv2.putText(display, "TAGS: " + "  ".join(parts), (10, h - 38), font, 0.55, (0, 255, 255), 2)
+    else:
+        cv2.putText(display, "TAGS: none", (10, h - 38), font, 0.5, (120, 120, 120), 1)
     cv2.putText(display, f"{info.get('fps', 0.0):.1f} FPS", (w - 100, 25), font, 0.5, (200, 200, 200), 1)
     return display
 
 
 def generate_frames():
     import time
-    global _latest_frame
     while True:
-        try:
-            frame = _frame_queue.get(timeout=0.5)
-            # Drain to the freshest queued frame so the stream never lags behind.
-            while True:
-                try:
-                    frame = _frame_queue.get_nowait()
-                except queue.Empty:
-                    break
-            with _latest_frame_lock:
-                _latest_frame = frame
-            if _SHOW_MASKS and _MASKS_AVAILABLE:
-                display = _montage(frame)
-            else:
-                display = visualize(cv2.resize(frame, _STREAM_SIZE, interpolation=cv2.INTER_AREA))
-            ret, jpeg = cv2.imencode('.jpg', display, [cv2.IMWRITE_JPEG_QUALITY, _STREAM_QUALITY])
-            if not ret:
-                continue
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
-        except queue.Empty:
+        frame = _frame_queue.get_latest()
+        if frame is None:
             blank = np.zeros((_STREAM_SIZE[1], _STREAM_SIZE[0], 3), dtype=np.uint8)
-            cv2.putText(blank, "Waiting for frames...", (110, _STREAM_SIZE[1] // 2),
+            cv2.putText(blank, "Waiting for camera...", (90, _STREAM_SIZE[1] // 2),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (80, 80, 80), 2)
             ret, jpeg = cv2.imencode('.jpg', blank, [cv2.IMWRITE_JPEG_QUALITY, _STREAM_QUALITY])
             if ret:
                 yield (b'--frame\r\n'
                        b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
-            time.sleep(0.05)
+            time.sleep(0.1)
+            continue
+        try:
+            if _SHOW_MASKS and _MASKS_AVAILABLE:
+                display = _montage(frame)
+            else:
+                display = visualize(cv2.resize(frame, _STREAM_SIZE, interpolation=cv2.INTER_AREA))
+            ret, jpeg = cv2.imencode('.jpg', display, [cv2.IMWRITE_JPEG_QUALITY, _STREAM_QUALITY])
+            if ret:
+                yield (b'--frame\r\n'
+                       b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
         except Exception as e:
-            print(f'[VideoStream] Error: {e}')
-            time.sleep(0.05)
+            print(f'[VideoStream] render error: {e}')
+        time.sleep(0.03)   # ~30 fps cap so the stream loop doesn't busy-spin
 
 
 @app.route('/')
@@ -223,8 +248,8 @@ def sample():
         fy = float(request.args.get('fy', -1.0))
     except ValueError:
         return jsonify(error='bad coords')
-    with _latest_frame_lock:
-        frame = None if _latest_frame is None else _latest_frame.copy()
+    frame = _frame_queue.get_latest()
+    frame = None if frame is None else frame.copy()
     if frame is None:
         return jsonify(error='no frame yet')
 
