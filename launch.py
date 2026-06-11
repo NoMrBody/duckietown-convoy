@@ -239,6 +239,36 @@ def stop_godot():
         godot_process = None
 
 
+def _kill_stale_sim_processes():
+    """Clear leftovers from a previous sim run. A zombie Godot or virtual
+    server keeps the old camera/wheel sockets alive and hijacks the new
+    run's connections — the fresh sim then 'freezes' waiting for frames."""
+    if platform.system() == 'Windows':
+        return
+    import signal as _signal
+    me = os.getpid()
+    killed = 0
+    for pattern in ('launch.py --sim', 'GodotSimulation/ducky-bot', 'virtual_server.py --port'):
+        try:
+            out = subprocess.run(['pgrep', '-f', pattern],
+                                 capture_output=True, text=True).stdout
+            for pid_s in out.split():
+                pid = int(pid_s)
+                if pid in (me, os.getppid()):
+                    continue
+                try:
+                    os.kill(pid, _signal.SIGTERM)
+                    killed += 1
+                except (ProcessLookupError, PermissionError):
+                    pass
+        except Exception:
+            pass
+    if killed:
+        print(f"  Cleaned up {killed} stale sim process(es) from a previous run")
+        import time as _time
+        _time.sleep(0.8)  # let their sockets close before binding ours
+
+
 def run_in_simulation(args):
     print("\n" + "=" * 60)
     print("RUN IN SIMULATION")
@@ -262,6 +292,8 @@ def run_in_simulation(args):
     if not os.path.exists(virtual_server_path):
         print(f"❌ ERROR: No virtual server found at servers/{task_name}/virtual_server.py")
         return 1
+
+    _kill_stale_sim_processes()
 
     print("[0/3] Finding available ports...")
     used_ports = set()
