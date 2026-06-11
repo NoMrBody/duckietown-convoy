@@ -23,14 +23,14 @@ def create_lane_visualization(
 
     for i, x in enumerate(debug_info.get('yellow_xs', [])):
         sy_list = debug_info.get('slice_ys', [])
-        if i < len(sy_list):
+        if x is not None and i < len(sy_list):
             dy = int(sy_list[i] * scale_y)
             dx = int(x * scale_x)
             cv2.circle(cam, (dx, dy), 5, (0, 255, 255), -1)   # yellow dot = yellow line
 
     for i, x in enumerate(debug_info.get('white_xs', [])):
         sy_list = debug_info.get('slice_ys', [])
-        if i < len(sy_list):
+        if x is not None and i < len(sy_list):
             dy = int(sy_list[i] * scale_y)
             dx = int(x * scale_x)
             cv2.circle(cam, (dx, dy), 5, (255, 255, 255), -1)  # white dot = white line

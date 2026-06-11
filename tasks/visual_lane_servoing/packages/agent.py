@@ -12,10 +12,26 @@ _CONFIG_FILE = os.path.normpath(os.path.join(
     os.path.dirname(__file__), '..', '..', '..', 'config', 'lane_servoing_config.yaml'
 ))
 
-_LINE_OFFSET = 160
 _ROI_START   = 0.47
 _NUM_SLICES  = 3
 _SLICE_TOL   = 5
+_CLUSTER_GAP = 10   # px column gap that splits two clusters in a strip
+_MIN_CLUSTER = 3    # unique columns; anything narrower is a speck
+
+# Lane half width per slice (far, mid, near), px at 640 wide. Perspective makes
+# the near slice span far wider than the far one, so a single shared value
+# mis-centers every single-line fallback; these are learned online per slice.
+_SLICE_HALF_WIDTHS = (175.0, 200.0, 270.0)
+
+
+def _cluster_means(cols: np.ndarray) -> list:
+    """Mean column of each contiguous cluster in a strip, left to right.
+    Clusters narrower than _MIN_CLUSTER unique columns are specks: dropped."""
+    xs = np.unique(cols)
+    if xs.size == 0:
+        return []
+    splits = np.where(np.diff(xs) > _CLUSTER_GAP)[0] + 1
+    return [float(np.mean(c)) for c in np.split(xs, splits) if c.size >= _MIN_CLUSTER]
 
 
 def detect_lines_in_slices(
@@ -23,6 +39,15 @@ def detect_lines_in_slices(
     mask_white:  np.ndarray,
     h: int,
 ) -> Tuple[list, list]:
+    """Per-slice line x positions; entries are None where a strip has no
+    detection, so both lists stay aligned with slice_ys.
+
+    The road has white lines on BOTH outer edges; a plain mean over all white
+    pixels lands between them (left of our lane's edge) and steers the bot
+    onto the left lane. Take the rightmost cluster instead — and when all
+    white sits left of the yellow centerline, it is the opposite road edge,
+    not ours: drop the slice.
+    """
     slice_height = int(h * 0.35 / _NUM_SLICES)
     start_y      = int(h * _ROI_START)
     yellow_xs, white_xs = [], []
@@ -30,17 +55,34 @@ def detect_lines_in_slices(
     for i in range(_NUM_SLICES):
         y = start_y + i * slice_height + slice_height // 2
 
-        strip_y = mask_yellow[y - _SLICE_TOL: y + _SLICE_TOL, :]
-        idx = np.where(strip_y > 0)[1]
-        if len(idx) > 0:
-            yellow_xs.append(int(np.mean(idx)))
+        strip_y  = mask_yellow[y - _SLICE_TOL: y + _SLICE_TOL, :]
+        clusters = _cluster_means(np.where(strip_y > 0)[1])
+        yellow_x = int(np.mean(clusters)) if clusters else None  # dashes = same centerline
+        yellow_xs.append(yellow_x)
 
-        strip_w = mask_white[y - _SLICE_TOL: y + _SLICE_TOL, :]
-        idx = np.where(strip_w > 0)[1]
-        if len(idx) > 0:
-            white_xs.append(int(np.mean(idx)))
+        strip_w  = mask_white[y - _SLICE_TOL: y + _SLICE_TOL, :]
+        clusters = _cluster_means(np.where(strip_w > 0)[1])
+        white_x  = None
+        if clusters:
+            white_x = int(clusters[-1])
+            if yellow_x is not None and white_x <= yellow_x:
+                white_x = None
+        white_xs.append(white_x)
 
-    return yellow_xs, white_xs
+    return _near_anchored(yellow_xs), _near_anchored(white_xs)
+
+
+def _near_anchored(xs: list) -> list:
+    """Keep only the contiguous run of picks that reaches the nearest strip.
+    A line the bot is actually following always crosses the near strips; picks
+    that exist only in far strips are another road's markings seen across a
+    corner — exactly the frames where they would command the wrong direction.
+    Lists are ordered far -> near."""
+    out = list(xs)
+    for i in range(len(out) - 2, -1, -1):   # from second-nearest up to far
+        if out[i + 1] is None:
+            out[i] = None
+    return out
 
 
 class LaneServoingAgent:
@@ -58,7 +100,7 @@ class LaneServoingAgent:
         self.max_steer           = cfg.get('max_steer',           0.4)
         self.base_speed          = cfg.get('base_speed',          0.2)
         self.curve_speed         = cfg.get('curve_speed',         0.2)
-        self.curve_threshold     = cfg.get('curve_threshold',     350)
+        self.curve_threshold     = cfg.get('curve_threshold',     15)
         self.steering_threshold  = cfg.get('steering_threshold',  0.2)
         self.curve_boost         = cfg.get('curve_boost',         1.3)
         self.detection_threshold = cfg.get('detection_threshold', 500)
@@ -66,7 +108,7 @@ class LaneServoingAgent:
         self.frame_count        = 0
         self._prev_error        = 0.0
         self._filtered_error    = 0.0
-        self._lane_half_width   = float(_LINE_OFFSET)
+        self._half_widths       = list(_SLICE_HALF_WIDTHS)
         self._left_history      = deque(maxlen=3)
         self._right_history     = deque(maxlen=3)
         self.last_debug_info    = self._empty_debug_info(480, 640)
@@ -78,20 +120,41 @@ class LaneServoingAgent:
         self._left_history.clear()
         self._right_history.clear()
 
+    @staticmethod
+    def _nearest_pick(xs):
+        for i in range(len(xs) - 1, -1, -1):   # lists are far -> near
+            if xs[i] is not None:
+                return i, xs[i]
+        return None, None
+
     def _calculate_error(self, yellow_xs, white_xs, left_det, right_det, w):
-        if left_det and right_det and yellow_xs and white_xs:
-            y_mean = float(np.mean(yellow_xs))
-            w_mean = float(np.mean(white_xs))
-            measured = (w_mean - y_mean) / 2.0
-            if measured > 20:
-                self._lane_half_width = 0.9 * self._lane_half_width + 0.1 * measured
-            error = w / 2.0 - (y_mean + w_mean) / 2.0
-        elif left_det and yellow_xs:
-            error = w / 2.0 - (float(np.mean(yellow_xs)) + self._lane_half_width)
-        elif right_det and white_xs:
-            error = w / 2.0 - (float(np.mean(white_xs)) - self._lane_half_width)
+        pairs = [(i, yx, wx) for i, (yx, wx) in enumerate(zip(yellow_xs, white_xs))
+                 if yx is not None and wx is not None]
+        ys = [x for x in yellow_xs if x is not None]
+        ws = [x for x in white_xs  if x is not None]
+
+        if left_det and right_det and pairs:
+            # Center per paired strip only: slice widths differ a lot with
+            # perspective, so mixing strip subsets for the two means skews
+            # the center. The half widths learn per slice for the same reason.
+            for i, yx, wx in pairs:
+                measured = (wx - yx) / 2.0
+                init = _SLICE_HALF_WIDTHS[i]
+                if 60.0 < measured < 340.0:
+                    self._half_widths[i] = float(np.clip(
+                        0.9 * self._half_widths[i] + 0.1 * measured,
+                        0.6 * init, 1.4 * init))
+            error = w / 2.0 - float(np.mean([(yx + wx) / 2.0 for _, yx, wx in pairs]))
+        elif left_det and ys:
+            # Single line: steer off the NEAREST strip's pick — a curving line
+            # poisons a cross-strip mean long before it leaves the near strip.
+            i, yx = self._nearest_pick(yellow_xs)
+            error = w / 2.0 - (yx + self._half_widths[i])
+        elif right_det and ws:
+            i, wx = self._nearest_pick(white_xs)
+            error = w / 2.0 - (wx - self._half_widths[i])
         else:
-            error = self._prev_error
+            return float(self._prev_error)  # already normalized — hold it as-is
 
         return float(np.clip(error / (w / 2.0), -1.0, 1.0))
 
