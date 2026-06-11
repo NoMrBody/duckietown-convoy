@@ -37,8 +37,11 @@ turn_radius_right_m: 0.17   # target arc radius for right turns (inner lane arc 
 # full cruise the same steer differential gives proportionally less curvature
 # and the bot runs wide into the opposing lane on 90-deg curves. Slow down
 # when a curve is detected (or steering demand is high).
-curve_speed_factor:    0.6   # cruise multiplier through curves
-curve_steer_threshold: 0.10  # |lane steer| above this also counts as a curve
+curve_speed_factor: 0.6      # cruise multiplier through detected curves
+steer_slowdown:     2.5      # speed scales by (1 - this * |steer|): more steering
+                             # demand = sharper geometry = slower (continuous,
+                             # replaces the old hard threshold)
+steer_floor_factor: 0.5      # never slow below this fraction of the base speed
 
 # --- maneuver shape / timing (FIELD-TUNE) ---
 turn_base_speed:    0.30    # forward speed during a turn arc
@@ -56,7 +59,10 @@ slow_after_factor:  0.6     # speed during that window = cruise * this
 wheel_baseline_m:   0.10    # wheel-to-wheel distance for encoder yaw estimate
 
 # --- closed-loop odometry maneuver targets (used when encoders are present) ---
-cross_distance_m:     0.35   # forward distance to clear one intersection tile
+cross_distance_m:     0.35   # forward distance to clear one intersection tile (real)
+cross_distance_sim_m: 0.55   # sim (pose odometry): carry across the WHOLE unmarked
+                             # box before handing back to the lane PD — releasing
+                             # mid-box left it steering with no markings in view
 maneuver_heading_kp:  0.6    # P gain holding heading straight during a cross
 turn_kp:              0.8    # P gain on remaining yaw error during a turn
 cross_dist_tol_m:     0.03   # distance tolerance for the cross exit

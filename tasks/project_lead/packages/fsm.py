@@ -70,9 +70,17 @@ class LeadFSM:
         # Slow down through map curves: the lane PD's steering differential
         # was tuned around the lane agent's own base speed — at full cruise
         # the same steer yields proportionally less curvature and the bot
-        # runs wide across the center line on 90-deg curve tiles.
-        self.curve_speed_factor   = float(cfg.get("curve_speed_factor", 0.6))
-        self.curve_steer_threshold = float(cfg.get("curve_steer_threshold", 0.10))
+        # runs wide across the center line on 90-deg curve tiles. Speed also
+        # scales down continuously with steering demand (high demand = sharp
+        # geometry or reacquisition, both need more curvature per meter).
+        self.curve_speed_factor = float(cfg.get("curve_speed_factor", 0.3))
+        self.steer_slowdown     = float(cfg.get("steer_slowdown", 2.5))
+        self.steer_floor_factor = float(cfg.get("steer_floor_factor", 0.5))
+        # Sim cross length (pose odometry): carry the bot across the WHOLE
+        # unmarked intersection box before handing back to the lane PD —
+        # cross_distance_m (field-tuned 0.35) releases it mid-box where there
+        # are no markings to steer by, which is where it overshot the exit.
+        self.cross_distance_sim_m = float(cfg.get("cross_distance_sim_m", 0.55))
 
         # Closed-loop odometry maneuver targets (used only when the agent passes
         # encoder distance/yaw; otherwise the timed values above are the fallback).
@@ -143,10 +151,14 @@ class LeadFSM:
                 return self._decide(STATE_DONE, 0.0, 0.0, RED)
             return self._run_maneuver(wm, t, turn_yaw_rad, fwd_dist_m, odo_source)
 
-        # 3) slow-after-turn window (give the follower time to reacquire)
+        # 3) slow-after-turn window (give the follower time to reacquire).
+        #    Scale further with steering demand: this is exactly the lane
+        #    re-entry where a hot PD correction overshoots the markings.
         if t < self._slow_after_until:
-            return self._decide(STATE_SLOW_AFTER, self.cruise_speed * self.slow_after_factor,
-                                wm.lane.steering_suggestion, YELLOW)
+            steer = wm.lane.steering_suggestion
+            return self._decide(STATE_SLOW_AFTER,
+                                self.cruise_speed * self.slow_after_factor * self._steer_factor(steer),
+                                steer, YELLOW)
 
         # 4) intersection event -> choose the next step: the map-aware
         #    navigator decides from the live pose when available, otherwise
@@ -176,13 +188,19 @@ class LeadFSM:
             return self._decide(STATE_SLOW, self.cruise_speed * self.slow_factor,
                                 wm.lane.steering_suggestion, YELLOW)
 
-        # 6) default: lane following; slow through curves so the PD's steer
-        #    produces enough curvature to hold the lane.
+        # 6) default: lane following; slow through curves and with steering
+        #    demand so the PD's steer produces enough curvature to hold the
+        #    lane (the stronger of the two slowdowns wins; they don't stack).
         steer = wm.lane.steering_suggestion
-        speed = self.cruise_speed
-        if wm.lane.is_curve or abs(steer) >= self.curve_steer_threshold:
-            speed *= self.curve_speed_factor
-        return self._decide(STATE_LANE, speed, steer, GREEN)
+        factor = self.curve_speed_factor if wm.lane.is_curve else 1.0
+        factor = min(factor, self._steer_factor(steer))
+        return self._decide(STATE_LANE, self.cruise_speed * factor, steer, GREEN)
+
+    def _steer_factor(self, steer: float) -> float:
+        """Continuous slowdown with steering demand, floored so the bot
+        always keeps moving."""
+        return clamp(1.0 - self.steer_slowdown * abs(steer),
+                     self.steer_floor_factor, 1.0)
 
     # --- internals ------------------------------------------------------------
     def _ingest_signs(self, wm: WorldModel) -> None:
@@ -252,13 +270,17 @@ class LeadFSM:
         # otherwise fall back to the legacy timed / lane-reacquire behaviour.
         have_odo = turn_yaw_rad is not None and fwd_dist_m is not None
 
+        # In sim, carry the cross through the whole unmarked intersection box
+        # (pose odometry is exact); the field-tuned distance stays for real.
+        cross_target = self.cross_distance_sim_m if odo_source == "pose" else self.cross_distance_m
+
         done = False
         if elapsed >= max_s:                                   # hard safety timeout
             done = True
         elif have_odo:
             if is_turn and abs(turn_yaw_rad) >= (self.turn_yaw_target - self.turn_yaw_tol_rad):
                 done = True                                    # turned to target heading
-            elif (not is_turn) and fwd_dist_m >= (self.cross_distance_m - self.cross_dist_tol_m):
+            elif (not is_turn) and fwd_dist_m >= (cross_target - self.cross_dist_tol_m):
                 done = True                                    # crossed the target distance
         elif is_turn and turn_yaw_rad is not None and abs(turn_yaw_rad) >= self.turn_yaw_target:
             done = True                                        # encoder yaw target reached
