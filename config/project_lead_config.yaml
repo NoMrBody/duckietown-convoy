@@ -23,8 +23,9 @@ auto_seed: null
 # --- fixed route ---
 # Steps consumed one-per-intersection (each red-line event). Tokens:
 #   straight | right | left | stop   (stop = final, latched halt)
-# Valid from the sim spawn: eastbound on the middle corridor, west of the
-# 4-way (the scene's DuckieBot start pose).
+# NOTE: spawn-relative — fixed mode executes tokens blindly in the order
+# intersections are met; it does NOT check the map. Current sim spawn:
+# bottom-left of the KIU map, west column, heading up toward the west T.
 route: [straight, straight, straight, left, right]
 
 # --- sim turn geometry (pose odometry only; the real robot keeps the
