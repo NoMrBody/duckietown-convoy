@@ -3,6 +3,7 @@ slowing/stopping and a fixed programmed route executed at red-line intersections
 
 The lead follows no one. It:
   - lane-follows on straightaways,
+  - enters CURVE (slowed) when the vision curve detector sees a bend ahead,
   - slows in SLOW zones (AprilTag SLOW signs),
   - remembers a STOP sign across the gap until the intersection's red line, halts
     ~1s, then executes the next route maneuver (turn left/right, cross straight,
@@ -20,6 +21,7 @@ from tasks.project.packages.fsm_common import (
 from tasks.project.packages.world_model import WorldModel
 
 STATE_LANE       = "LANE_FOLLOW"
+STATE_CURVE      = "CURVE"
 STATE_STOP       = "STOP_AT_SIGN"
 STATE_SLOW       = "SLOW_ZONE"
 STATE_CROSS      = "CROSS_STRAIGHT"
@@ -104,8 +106,13 @@ class LeadFSM:
         self.fire_width  = float(cfg.get("stopline_fire_width", 0.40))
         self.clear_frames = int(cfg.get("stopline_clear_frames", 5))
 
+        # Brief hold so the CURVE state doesn't flap when the detector
+        # flickers frame to frame.
+        self.curve_hold_s = float(cfg.get("curve_hold_s", 0.4))
+
         # mutable state
         self.route_idx = 0
+        self._curve_until = -1.0
         self._stop_until = -1.0
         self._slow_until = -1.0
         self._slow_cooldown_until = -1.0
@@ -188,13 +195,21 @@ class LeadFSM:
             return self._decide(STATE_SLOW, self.cruise_speed * self.slow_factor,
                                 wm.lane.steering_suggestion, YELLOW)
 
-        # 6) default: lane following; slow through curves and with steering
-        #    demand so the PD's steer produces enough curvature to hold the
-        #    lane (the stronger of the two slowdowns wins; they don't stack).
+        # 6) curve approach: the detector is vision-based (lane-marking
+        #    spread), so it fires while the bend is still ahead — slow into
+        #    and through it as a dedicated state. Held briefly so a
+        #    flickering detection doesn't flap the state.
         steer = wm.lane.steering_suggestion
-        factor = self.curve_speed_factor if wm.lane.is_curve else 1.0
-        factor = min(factor, self._steer_factor(steer))
-        return self._decide(STATE_LANE, self.cruise_speed * factor, steer, GREEN)
+        if wm.lane.is_curve:
+            self._curve_until = t + self.curve_hold_s
+        if t < self._curve_until:
+            factor = min(self.curve_speed_factor, self._steer_factor(steer))
+            return self._decide(STATE_CURVE, self.cruise_speed * factor, steer, YELLOW)
+
+        # 7) default: lane following; speed still scales with steering demand
+        #    (reacquire wobbles and the like).
+        return self._decide(STATE_LANE, self.cruise_speed * self._steer_factor(steer),
+                            steer, GREEN)
 
     def _steer_factor(self, steer: float) -> float:
         """Continuous slowdown with steering demand, floored so the bot

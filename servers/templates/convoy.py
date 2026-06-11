@@ -103,14 +103,25 @@ def _content(task):
                 <div class="status" id="sim-status"></div>
             </div>
             <div class="card">
-                <div class="card-header">Tuning</div>
-                <div class="kv"><span>Cruise speed</span>
-                    <input class="input-box" id="tune-speed" type="number" step="0.01" min="0.05" max="0.6"></div>
-                <div class="kv"><span>Lane Kp</span>
-                    <input class="input-box" id="tune-kp" type="number" step="0.01" min="0" max="1"></div>
-                <div class="kv"><span>Lane Kd</span>
-                    <input class="input-box" id="tune-kd" type="number" step="0.01" min="0" max="2"></div>
-                <button class="button success" onclick="applyTuning()">Apply</button>
+                <div class="card-header">Tuning <span class="state-badge">live</span></div>
+                <div class="slider-group">
+                    <div class="slider-label"><span>Cruise speed</span><span id="tune-speed-val">&mdash;</span></div>
+                    <div class="slider-controls">
+                        <input type="range" class="slider" id="tune-speed" min="0.05" max="0.6" step="0.01">
+                    </div>
+                </div>
+                <div class="slider-group">
+                    <div class="slider-label"><span>Lane Kp</span><span id="tune-kp-val">&mdash;</span></div>
+                    <div class="slider-controls">
+                        <input type="range" class="slider" id="tune-kp" min="0" max="1" step="0.01">
+                    </div>
+                </div>
+                <div class="slider-group">
+                    <div class="slider-label"><span>Lane Kd</span><span id="tune-kd-val">&mdash;</span></div>
+                    <div class="slider-controls">
+                        <input type="range" class="slider" id="tune-kd" min="0" max="2" step="0.01">
+                    </div>
+                </div>
                 <div class="status" id="tune-status"></div>
             </div>
             <div class="card">
@@ -133,6 +144,7 @@ const STATE_COLORS = {
     ROUTE_DONE: 'var(--accent-purple)',
     SLOW_ZONE: 'var(--accent-orange)', SLOW_AFTER_TURN: 'var(--accent-orange)',
     REACQUIRE: 'var(--accent-orange)', PURSUIT_TURN: 'var(--accent-orange)',
+    CURVE: 'var(--accent-orange)',
     TURN_LEFT: 'var(--accent-blue)', TURN_RIGHT: 'var(--accent-blue)',
     CROSS_STRAIGHT: 'var(--accent-blue)',
     WAIT_LEAD: 'var(--text-muted)', HOLD: 'var(--text-muted)'
@@ -237,14 +249,25 @@ async function toggleAgent() {
     showStatus('sim-status', r.message || 'ok', r.status === 'ok' ? 'success' : 'error');
 }
 
-// --- live tuning (cruise speed + lane PD gains) ------------------------------
+// --- live tuning knobs (cruise speed + lane PD gains) ------------------------
+// Sliders auto-apply (debounced) to the running agent and persist to config.
+const TUNE_IDS = { speed: 'tune-speed', kp: 'tune-kp', kd: 'tune-kd' };
+let tuneTimer = null;
+let tuneDirty = false;
+
+function setKnob(id, v) {
+    const el = document.getElementById(id);
+    if (v == null) return;
+    if (!tuneDirty && document.activeElement !== el) el.value = v;
+    document.getElementById(id + '-val').textContent = Number(el.value).toFixed(2);
+}
+
 async function loadTuning() {
     try {
         const d = await (await fetch('/tuning')).json();
-        for (const pair of [['tune-speed', d.speed], ['tune-kp', d.kp], ['tune-kd', d.kd]]) {
-            const el = document.getElementById(pair[0]);
-            if (pair[1] != null && document.activeElement !== el) el.value = pair[1];
-        }
+        setKnob('tune-speed', d.speed);
+        setKnob('tune-kp', d.kp);
+        setKnob('tune-kd', d.kd);
     } catch (e) { /* agent may not be live yet */ }
 }
 loadTuning();
@@ -257,7 +280,17 @@ async function applyTuning() {
     };
     const r = await postJSON('/tuning',
         { speed: num('tune-speed'), kp: num('tune-kp'), kd: num('tune-kd') });
+    tuneDirty = false;
     showStatus('tune-status', r.message || 'applied', r.status === 'ok' ? 'success' : 'error');
+}
+
+for (const id of Object.values(TUNE_IDS)) {
+    document.getElementById(id).addEventListener('input', function () {
+        tuneDirty = true;
+        document.getElementById(id + '-val').textContent = Number(this.value).toFixed(2);
+        clearTimeout(tuneTimer);
+        tuneTimer = setTimeout(applyTuning, 300);
+    });
 }
 async function resetSim() {
     const r = await postJSON('/reset', {});

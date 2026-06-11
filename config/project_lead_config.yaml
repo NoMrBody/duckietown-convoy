@@ -37,7 +37,8 @@ turn_radius_right_m: 0.17   # target arc radius for right turns (inner lane arc 
 # full cruise the same steer differential gives proportionally less curvature
 # and the bot runs wide into the opposing lane on 90-deg curves. Slow down
 # when a curve is detected (or steering demand is high).
-curve_speed_factor: 0.6      # cruise multiplier through detected curves
+curve_speed_factor: 0.6      # CURVE-state speed = cruise * this
+curve_hold_s:       0.4      # hold CURVE this long after the last detection (no flapping)
 steer_slowdown:     2.5      # speed scales by (1 - this * |steer|): more steering
                              # demand = sharper geometry = slower (continuous,
                              # replaces the old hard threshold)
