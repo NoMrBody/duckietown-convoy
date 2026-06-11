@@ -5,6 +5,30 @@ import time
 import cv2
 
 
+def update_yaml_values(path, updates):
+    """Rewrite top-level scalar keys in a YAML file in place, preserving all
+    comments and layout (yaml.dump would destroy the hand-written comments in
+    the config files). Keys not found are appended at the end."""
+    try:
+        with open(path) as f:
+            text = f.read()
+    except FileNotFoundError:
+        text = ""
+
+    for key, value in updates.items():
+        sval = f"{value:g}" if isinstance(value, float) else str(value)
+        pattern = re.compile(rf"^({re.escape(key)}\s*:\s*)([^#\n]*?)(\s*#.*)?$", re.M)
+        if pattern.search(text):
+            text = pattern.sub(lambda m: m.group(1) + sval + (m.group(3) or ""), text, count=1)
+        else:
+            if text and not text.endswith("\n"):
+                text += "\n"
+            text += f"{key}: {sval}\n"
+
+    with open(path, "w") as f:
+        f.write(text)
+
+
 class LatestFrame:
     """Single-slot frame holder: the newest frame always wins, never blocks
     and never fills up. Queue-compatible put_nowait so agents can treat it

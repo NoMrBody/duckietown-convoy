@@ -103,6 +103,17 @@ def _content(task):
                 <div class="status" id="sim-status"></div>
             </div>
             <div class="card">
+                <div class="card-header">Tuning</div>
+                <div class="kv"><span>Cruise speed</span>
+                    <input class="input-box" id="tune-speed" type="number" step="0.01" min="0.05" max="0.6"></div>
+                <div class="kv"><span>Lane Kp</span>
+                    <input class="input-box" id="tune-kp" type="number" step="0.01" min="0" max="1"></div>
+                <div class="kv"><span>Lane Kd</span>
+                    <input class="input-box" id="tune-kd" type="number" step="0.01" min="0" max="2"></div>
+                <button class="button success" onclick="applyTuning()">Apply</button>
+                <div class="status" id="tune-status"></div>
+            </div>
+            <div class="card">
                 <div class="card-header">HSV sampler</div>
                 <div class="hsv-hint">Click the camera (top-left) panel of the video to read the
                 H/S/V the detectors see &mdash; paste values into the HSV config.</div>
@@ -224,6 +235,29 @@ pollStatus();
 async function toggleAgent() {
     const r = await postJSON(agentRunning ? '/agent/stop' : '/agent/start', {});
     showStatus('sim-status', r.message || 'ok', r.status === 'ok' ? 'success' : 'error');
+}
+
+// --- live tuning (cruise speed + lane PD gains) ------------------------------
+async function loadTuning() {
+    try {
+        const d = await (await fetch('/tuning')).json();
+        for (const pair of [['tune-speed', d.speed], ['tune-kp', d.kp], ['tune-kd', d.kd]]) {
+            const el = document.getElementById(pair[0]);
+            if (pair[1] != null && document.activeElement !== el) el.value = pair[1];
+        }
+    } catch (e) { /* agent may not be live yet */ }
+}
+loadTuning();
+setTimeout(loadTuning, 3000);  // again once the agent thread is up
+
+async function applyTuning() {
+    const num = id => {
+        const v = parseFloat(document.getElementById(id).value);
+        return isNaN(v) ? null : v;
+    };
+    const r = await postJSON('/tuning',
+        { speed: num('tune-speed'), kp: num('tune-kp'), kd: num('tune-kd') });
+    showStatus('tune-status', r.message || 'applied', r.status === 'ok' ? 'success' : 'error');
 }
 async function resetSim() {
     const r = await postJSON('/reset', {});

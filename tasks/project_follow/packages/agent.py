@@ -21,11 +21,18 @@ def _load_cfg() -> dict:
         return {}
 
 
+# Live handles to the running FSM/perception, so the sim server's /tuning
+# endpoint can adjust gains and speeds without restarting the agent.
+live = {}
+
+
 def main(camera, wheels, leds, stop_event,
          frame_queue=None, debug_lock=None, debug_dict=None, **_ignored):
     cfg = _load_cfg()
     perception = FollowPerception(cfg)
     fsm = FollowerFSM(cfg)
+    live['fsm'] = fsm
+    live['perception'] = perception
 
     last_state = None
     last_hw_warn = 0.0

@@ -18,7 +18,7 @@ from duckiebot.wheel_driver.godot_wheels_driver import GodotWheelsDriver
 from duckiebot.wheel_driver.wheels_driver_abs import WheelPWMConfiguration
 from launcher.ports import find_available_port
 from launcher.config import GODOT_SCENES
-from servers.common import LatestFrame, shutdown_cleanup, suppress_http_logs
+from servers.common import LatestFrame, shutdown_cleanup, suppress_http_logs, update_yaml_values
 from servers.sim_map import load_map_for_scene
 from servers.templates.convoy import get_template
 
@@ -265,6 +265,61 @@ def sample():
         v=int(np.median(hsv[:, :, 2])),
         px=px, py=py,
     )
+
+
+_LANE_CONFIG_FILE = os.path.normpath(os.path.join(script_dir, '..', '..', 'config', 'lane_servoing_config.yaml'))
+
+# UI tuning bounds: (min, max)
+_TUNE_BOUNDS = {'speed': (0.05, 0.6), 'kp': (0.0, 1.0), 'kd': (0.0, 2.0)}
+
+
+@app.route('/tuning', methods=['GET', 'POST'])
+def tuning():
+    """Live-tune cruise speed and the lane PD gains. Applies to the running
+    agent immediately and persists to the YAML configs so restarts keep it."""
+    live = getattr(agent, 'live', {})
+    fsm = live.get('fsm')
+    lane = getattr(live.get('perception'), 'lane', None)
+
+    if request.method == 'GET':
+        return jsonify(
+            speed=getattr(fsm, 'cruise_speed', None),
+            kp=getattr(lane, 'p_gain', None),
+            kd=getattr(lane, 'd_gain', None),
+        )
+
+    body = request.get_json(silent=True) or {}
+    applied = {}
+    for key in ('speed', 'kp', 'kd'):
+        if body.get(key) is None:
+            continue
+        try:
+            lo, hi = _TUNE_BOUNDS[key]
+            applied[key] = min(hi, max(lo, float(body[key])))
+        except (TypeError, ValueError):
+            return jsonify(status='error', message=f'bad value for {key}')
+    if not applied:
+        return jsonify(status='error', message='nothing to apply')
+
+    if 'speed' in applied:
+        if fsm is not None:
+            fsm.cruise_speed = applied['speed']
+        update_yaml_values(_CONFIG_FILE, {'cruise_speed': applied['speed']})
+    lane_updates = {}
+    if 'kp' in applied:
+        if lane is not None:
+            lane.p_gain = applied['kp']
+        lane_updates['p_gain'] = applied['kp']
+    if 'kd' in applied:
+        if lane is not None:
+            lane.d_gain = applied['kd']
+        lane_updates['d_gain'] = applied['kd']
+    if lane_updates:
+        update_yaml_values(_LANE_CONFIG_FILE, lane_updates)
+
+    live_note = '' if fsm is not None else ' (agent not running: saved to config only)'
+    return jsonify(status='ok',
+                   message='applied ' + ', '.join(f'{k}={v:g}' for k, v in applied.items()) + live_note)
 
 
 @app.route('/agent/start', methods=['POST'])

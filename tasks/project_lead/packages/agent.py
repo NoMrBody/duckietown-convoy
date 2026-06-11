@@ -16,6 +16,10 @@ _CONFIG_FILE = os.path.normpath(
 
 _MANEUVER_STATES = {STATE_TURN_L, STATE_TURN_R, STATE_CROSS}
 
+# Live handles to the running FSM/perception, so the sim server's /tuning
+# endpoint can adjust gains and speeds without restarting the agent.
+live = {}
+
 
 def _load_cfg() -> dict:
     try:
@@ -51,6 +55,8 @@ def main(camera, wheels, leds, stop_event,
             print(f"[lead] auto navigation unavailable ({e!r}) — using the fixed route")
     fsm = LeadFSM(cfg, navigator=navigator)
     baseline = float(cfg.get("wheel_baseline_m", 0.1))
+    live['fsm'] = fsm
+    live['perception'] = perception
 
     last_state = None
     last_hw_warn = 0.0
