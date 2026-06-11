@@ -129,8 +129,27 @@ def visualize(frame_bgr):
     return display
 
 
+# While the agent runs, it is the frame pump; when paused nothing pumps and the
+# stream froze on the last frame — pull straight from the camera instead.
+# Locked: several /video clients run this generator concurrently.
+_direct_read_lock = threading.Lock()
+
+
+def _refresh_frame_if_paused():
+    if _agent_alive() or camera is None:
+        return
+    try:
+        with _direct_read_lock:
+            ok, live = camera.read()
+        if ok and live is not None:
+            _frame_queue.put_nowait(live.copy())   # /sample stays fresh too
+    except Exception:
+        pass
+
+
 def generate_frames():
     while True:
+        _refresh_frame_if_paused()
         frame = _frame_queue.get_latest()
         try:
             if frame is None:
@@ -139,6 +158,9 @@ def generate_frames():
                 display = _montage(frame)
             else:
                 display = visualize(frame)
+            if frame is not None and not _agent_alive():
+                cv2.putText(display, 'AGENT PAUSED', (10, display.shape[0] - 12),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 200, 255), 2)
             ret, jpeg = cv2.imencode('.jpg', display, [cv2.IMWRITE_JPEG_QUALITY, _STREAM_QUALITY])
             if ret:
                 yield (b'--frame\r\n'
