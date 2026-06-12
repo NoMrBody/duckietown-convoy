@@ -18,7 +18,8 @@ from duckiebot.wheel_driver.godot_wheels_driver import GodotWheelsDriver
 from duckiebot.wheel_driver.wheels_driver_abs import WheelPWMConfiguration
 from launcher.ports import find_available_port
 from launcher.config import GODOT_SCENES
-from servers.common import LatestFrame, shutdown_cleanup, suppress_http_logs, update_yaml_values
+from servers.common import (LatestFrame, handle_hsv_tuning, shutdown_cleanup,
+                            suppress_http_logs, update_yaml_values)
 from servers.sim_map import load_map_for_scene
 from servers.templates.convoy import get_template
 
@@ -129,8 +130,27 @@ def visualize(frame_bgr):
     return display
 
 
+# While the agent runs, it is the frame pump; when paused nothing pumps and the
+# stream froze on the last frame — pull straight from the camera instead.
+# Locked: several /video clients run this generator concurrently.
+_direct_read_lock = threading.Lock()
+
+
+def _refresh_frame_if_paused():
+    if _agent_alive() or camera is None:
+        return
+    try:
+        with _direct_read_lock:
+            ok, live = camera.read()
+        if ok and live is not None:
+            _frame_queue.put_nowait(live.copy())   # /sample stays fresh too
+    except Exception:
+        pass
+
+
 def generate_frames():
     while True:
+        _refresh_frame_if_paused()
         frame = _frame_queue.get_latest()
         try:
             if frame is None:
@@ -139,6 +159,9 @@ def generate_frames():
                 display = _montage(frame)
             else:
                 display = visualize(frame)
+            if frame is not None and not _agent_alive():
+                cv2.putText(display, 'AGENT PAUSED', (10, display.shape[0] - 12),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 200, 255), 2)
             ret, jpeg = cv2.imencode('.jpg', display, [cv2.IMWRITE_JPEG_QUALITY, _STREAM_QUALITY])
             if ret:
                 yield (b'--frame\r\n'
@@ -268,6 +291,12 @@ def sample():
 
 
 _LANE_CONFIG_FILE = os.path.normpath(os.path.join(script_dir, '..', '..', 'config', 'lane_servoing_config.yaml'))
+_HSV_CONFIG_FILE  = os.path.normpath(os.path.join(script_dir, '..', '..', 'config', 'lane_servoing_hsv_config.yaml'))
+
+
+@app.route('/hsv', methods=['GET', 'POST'])
+def hsv_tuning():
+    return jsonify(handle_hsv_tuning(request, _HSV_CONFIG_FILE))
 
 # UI tuning bounds: (min, max)
 _TUNE_BOUNDS = {'speed': (0.05, 0.6), 'kp': (0.0, 1.0), 'kd': (0.0, 2.0)}

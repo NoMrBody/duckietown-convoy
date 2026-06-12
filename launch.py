@@ -410,6 +410,13 @@ def package_task(task_name):
             print(f"   Adding server: servers/{task_name}/")
             tar.add(task_server_dir, arcname=f'servers/{task_name}', filter=no_pycache)
 
+        # Shared modules the task servers import (web template, helpers, ports).
+        for shared in ('servers/__init__.py', 'servers/common.py', 'servers/sim_map.py',
+                       'servers/templates', 'launcher'):
+            shared_path = os.path.join(PROJECT_ROOT, shared)
+            if os.path.exists(shared_path):
+                tar.add(shared_path, arcname=shared, filter=no_pycache)
+
     buf.seek(0)
     print("Package created!")
     return buf

@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 
 from tasks.project_lead.packages.fsm import (  # noqa: E402
     LeadFSM, STATE_LANE, STATE_STOP, STATE_TURN_R, STATE_TURN_L, STATE_SLOW_AFTER,
-    STATE_DONE, STATE_SLOW, STATE_CROSS,
+    STATE_DONE, STATE_SLOW, STATE_CROSS, STATE_LOST,
 )
 from tasks.project.packages.world_model import LaneObs, RedLineObs, SignObs, WorldModel  # noqa: E402
 
@@ -266,6 +266,38 @@ def test_max_timeout_overrides_odometry():
                     turn_yaw_rad=0.0, fwd_dist_m=0.0).state_name == STATE_CROSS
     assert fsm.step(_wm(1.3, lane_healthy=False),
                     turn_yaw_rad=0.0, fwd_dist_m=0.0).state_name == STATE_SLOW_AFTER
+
+
+def test_lane_lost_halts_after_grace_and_recovers():
+    fsm = LeadFSM(_cfg())
+    assert fsm.step(_wm(0.1)).state_name == STATE_LANE
+    # unhealthy while cruising: keep driving through the grace window...
+    assert fsm.step(_wm(0.5, lane_healthy=False)).state_name == STATE_LANE
+    assert fsm.step(_wm(2.0, lane_healthy=False)).state_name == STATE_LANE
+    # ...then halt instead of cruising blind
+    d = fsm.step(_wm(2.3, lane_healthy=False))
+    assert d.state_name == STATE_LOST and d.base_speed == 0.0
+    # markings back in view -> resume
+    assert fsm.step(_wm(2.4)).state_name == STATE_LANE
+
+
+def test_lane_lost_grace_restarts_after_maneuver():
+    # Regression (real bot): the unhealthy clock ran on through the maneuver +
+    # slow-after window (where no markings is normal), so the bot halted on the
+    # FIRST cruising frame after every intersection instead of reacquiring.
+    fsm = LeadFSM(_cfg())
+    assert fsm.step(_wm(0.1)).state_name == STATE_LANE
+    assert fsm.step(_wm(0.2, red=_red(), lane_healthy=False)).state_name == STATE_TURN_R
+    # lane stays unhealthy through the whole turn (timeout exit at max_turn_s)
+    assert fsm.step(_wm(1.0, lane_healthy=False)).state_name == STATE_TURN_R
+    assert fsm.step(_wm(3.3, lane_healthy=False)).state_name == STATE_SLOW_AFTER
+    assert fsm.step(_wm(5.25, lane_healthy=False)).state_name == STATE_SLOW_AFTER
+    # window over, still unhealthy: must CRUISE (full grace), not halt
+    assert fsm.step(_wm(5.4, lane_healthy=False)).state_name == STATE_LANE
+    assert fsm.step(_wm(7.0, lane_healthy=False)).state_name == STATE_LANE
+    # grace spent without reacquiring -> now halt
+    d = fsm.step(_wm(7.5, lane_healthy=False))
+    assert d.state_name == STATE_LOST and d.base_speed == 0.0
 
 
 def _run():

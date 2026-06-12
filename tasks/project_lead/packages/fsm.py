@@ -147,6 +147,16 @@ class LeadFSM:
         self._update_latch(wm)
         self._ingest_signs(wm)
 
+        # Lane-lost clock: measures unhealthy time only while CRUISING. During
+        # a maneuver / halt / slow-after window the bot legitimately sees no
+        # markings (intersection box), so the clock is pinned there — cruising
+        # resumes with the full grace period to reacquire the lane instead of
+        # halting on the first frame after the window expires.
+        busy = (self._maneuver is not None or self._pending_step is not None
+                or t < self._stop_until or t < self._slow_after_until)
+        if self._last_lane_ok is None or wm.lane.healthy or busy:
+            self._last_lane_ok = t
+
         if self._done:
             return self._decide(STATE_DONE, 0.0, 0.0, RED)
 
@@ -197,11 +207,8 @@ class LeadFSM:
                 return self._decide(STATE_DONE, 0.0, 0.0, RED)
             return self._run_maneuver(wm, t, turn_yaw_rad, fwd_dist_m, odo_source)
 
-        # 5) lane lost while cruising: hold position instead of driving blind.
-        #    The clock starts at the first step so a markings-free spawn frame
-        #    doesn't trip it, and resets whenever the lane is healthy.
-        if self._last_lane_ok is None or wm.lane.healthy:
-            self._last_lane_ok = t
+        # 5) lane lost while cruising: hold position instead of driving blind
+        #    (clock maintained at the top of step()).
         if t - self._last_lane_ok > self.lane_lost_stop_s:
             return self._decide(STATE_LOST, 0.0, 0.0, RED)
 

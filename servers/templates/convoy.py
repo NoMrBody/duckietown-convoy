@@ -74,7 +74,42 @@ def _state_panel(task):
             <div class="kv"><span>Sim</span><b id="kv-game">&mdash;</b></div>'''
 
 
-def _content(task):
+# Live HSV knobs: (slider id, label, max). All min 0, step 1; ids map to the
+# lane_servoing_hsv_config keys in _JS_COMMON's HSV_KNOBS table.
+_HSV_SLIDERS = (
+    ('hsv-ylh', 'Yellow H min', 60),
+    ('hsv-yuh', 'Yellow H max', 90),
+    ('hsv-yls', 'Yellow S min', 255),
+    ('hsv-ylv', 'Yellow V min', 255),
+    ('hsv-wus', 'White S max', 150),
+    ('hsv-wlv', 'White V min', 255),
+)
+
+
+def _hsv_sliders():
+    return ''.join(f'''
+                <div class="slider-group">
+                    <div class="slider-label"><span>{label}</span><span id="{sid}-val">&mdash;</span></div>
+                    <div class="slider-controls">
+                        <input type="range" class="slider" id="{sid}" min="0" max="{hi}" step="1">
+                    </div>
+                </div>''' for sid, label, hi in _HSV_SLIDERS)
+
+
+def _content(task, sim=True):
+    run_card = ('''
+            <div class="card">
+                <div class="card-header">Simulation</div>
+                <button class="button" id="btn-agent" onclick="toggleAgent()">Pause agent</button>
+                <button class="button danger" onclick="resetSim()">Reset simulation</button>
+                <div class="status" id="sim-status"></div>
+            </div>''' if sim else '''
+            <div class="card">
+                <div class="card-header">Robot</div>
+                <button class="button" id="btn-agent" onclick="toggleAgent()">Pause agent</button>
+                <button class="button danger" onclick="resetSim()">Restart agent</button>
+                <div class="status" id="sim-status"></div>
+            </div>''')
     return f'''
     <div class="container">
         <div class="video-section">
@@ -95,13 +130,7 @@ def _content(task):
                 <div class="card-header">Track map <span class="state-badge" id="pose-source">no pose</span></div>
                 <canvas id="map-canvas"></canvas>
                 <div class="map-note" id="map-note"></div>
-            </div>
-            <div class="card">
-                <div class="card-header">Simulation</div>
-                <button class="button" id="btn-agent" onclick="toggleAgent()">Pause agent</button>
-                <button class="button danger" onclick="resetSim()">Reset simulation</button>
-                <div class="status" id="sim-status"></div>
-            </div>
+            </div>{run_card}
             <div class="card">
                 <div class="card-header">Tuning <span class="state-badge">live</span></div>
                 <div class="slider-group">
@@ -125,9 +154,16 @@ def _content(task):
                 <div class="status" id="tune-status"></div>
             </div>
             <div class="card">
+                <div class="card-header">Lane HSV <span class="state-badge">live</span></div>
+                <div class="hsv-hint">Bounds apply to the running detector instantly &mdash; watch
+                the YELLOW / WHITE mask panels while dragging.</div>
+                {_hsv_sliders()}
+                <div class="status" id="hsv-status"></div>
+            </div>
+            <div class="card">
                 <div class="card-header">HSV sampler</div>
                 <div class="hsv-hint">Click the camera (top-left) panel of the video to read the
-                H/S/V the detectors see &mdash; paste values into the HSV config.</div>
+                H/S/V the detectors see &mdash; then set the bounds above around it.</div>
                 <div class="hsv-out" id="hsv-out">&mdash;</div>
             </div>
         </div>
@@ -137,6 +173,7 @@ def _content(task):
 _JS_COMMON = '''
 const MAP = {{ map_json|safe }};
 const TASK = '__TASK__';
+const SIM = __SIM__;
 
 const STATE_COLORS = {
     LANE_FOLLOW: 'var(--accent-green)', FOLLOW: 'var(--accent-green)',
@@ -170,6 +207,7 @@ function updateAgentPanel(d) {
     const g = d.game || {};
     const gameEl = document.getElementById('kv-game');
     if (gameEl) {
+        gameEl.parentElement.style.display = Object.keys(g).length ? '' : 'none';
         if (g.game_over) {
             gameEl.textContent = 'GAME OVER' + (g.collision_duck ? ' (hit ' + g.collision_duck + ')' : '');
             gameEl.style.color = 'var(--accent-red)';
@@ -296,6 +334,51 @@ async function resetSim() {
     const r = await postJSON('/reset', {});
     clearTrail();
     showStatus('sim-status', r.message || 'simulation reset', r.status === 'ok' ? 'success' : 'error');
+}
+
+// --- live lane HSV knobs -----------------------------------------------------
+// Same auto-apply pattern as the tuning card; the detector picks the bounds up
+// on the next frame, so the mask panels are the live preview.
+const HSV_KNOBS = {
+    'hsv-ylh': 'yellow_lower_h', 'hsv-yuh': 'yellow_upper_h',
+    'hsv-yls': 'yellow_lower_s', 'hsv-ylv': 'yellow_lower_v',
+    'hsv-wus': 'white_upper_s',  'hsv-wlv': 'white_lower_v',
+};
+let hsvTimer = null;
+let hsvDirty = false;
+
+async function loadHsv() {
+    try {
+        const d = await (await fetch('/hsv')).json();
+        for (const [id, key] of Object.entries(HSV_KNOBS)) {
+            const el = document.getElementById(id);
+            if (d[key] == null) continue;
+            if (!hsvDirty && document.activeElement !== el) el.value = d[key];
+            document.getElementById(id + '-val').textContent = el.value;
+        }
+    } catch (e) { /* server may not expose /hsv yet */ }
+}
+loadHsv();
+setTimeout(loadHsv, 3000);
+
+async function applyHsv() {
+    const body = {};
+    for (const [id, key] of Object.entries(HSV_KNOBS)) {
+        const v = parseInt(document.getElementById(id).value, 10);
+        if (!isNaN(v)) body[key] = v;
+    }
+    const r = await postJSON('/hsv', body);
+    hsvDirty = false;
+    showStatus('hsv-status', r.message || 'applied', r.status === 'ok' ? 'success' : 'error');
+}
+
+for (const id of Object.keys(HSV_KNOBS)) {
+    document.getElementById(id).addEventListener('input', function () {
+        hsvDirty = true;
+        document.getElementById(id + '-val').textContent = this.value;
+        clearTimeout(hsvTimer);
+        hsvTimer = setTimeout(applyHsv, 300);
+    });
 }
 
 // --- click-to-sample HSV (camera = top-left quarter of the montage) ---------
@@ -476,7 +559,8 @@ function onPose(p, lp) {
     if (!p) {
         srcEl.textContent = 'no pose';
         srcEl.style.color = 'var(--text-muted)';
-        setText('map-note', 'live pose unavailable \\u2014 waiting for Godot (circle = spawn)');
+        setText('map-note', SIM ? 'live pose unavailable \\u2014 waiting for Godot (circle = spawn)'
+                                : 'no localization on the real robot \\u2014 map for reference (circle = sim spawn)');
         return;
     }
     srcEl.textContent = 'live';
@@ -546,9 +630,10 @@ window.addEventListener('resize', () => { if (MAP_OK) setupMap(); });
 '''
 
 
-def get_template(task, title, subtitle):
-    """task: 'lead' or 'follow'. Returns a Jinja template string expecting
-    one variable: map_json (JSON string or 'null')."""
+def get_template(task, title, subtitle, sim=True):
+    """task: 'lead' or 'follow'. sim=False relabels the run controls for the
+    real robot (no Godot: /reset restarts the agent, pose stays null). Returns
+    a Jinja template string expecting one variable: map_json (JSON or 'null')."""
     assert task in ('lead', 'follow')
-    js = (_JS_COMMON + _JS_MAP).replace('__TASK__', task)
-    return render_template(title, subtitle, _content(task), extra_css=_EXTRA_CSS, extra_js=js)
+    js = (_JS_COMMON + _JS_MAP).replace('__TASK__', task).replace('__SIM__', 'true' if sim else 'false')
+    return render_template(title, subtitle, _content(task, sim=sim), extra_css=_EXTRA_CSS, extra_js=js)

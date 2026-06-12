@@ -18,7 +18,8 @@ from duckiebot.wheel_driver.godot_wheels_driver import GodotWheelsDriver
 from duckiebot.wheel_driver.wheels_driver_abs import WheelPWMConfiguration
 from launcher.ports import find_available_port
 from launcher.config import GODOT_SCENES
-from servers.common import LatestFrame, shutdown_cleanup, suppress_http_logs, update_yaml_values
+from servers.common import (LatestFrame, handle_hsv_tuning, shutdown_cleanup,
+                            suppress_http_logs, update_yaml_values)
 from servers.sim_map import load_map_for_scene
 from servers.templates.convoy import get_template
 
@@ -311,6 +312,12 @@ def sample():
 
 
 _LANE_CONFIG_FILE = os.path.normpath(os.path.join(script_dir, '..', '..', 'config', 'lane_servoing_config.yaml'))
+_HSV_CONFIG_FILE  = os.path.normpath(os.path.join(script_dir, '..', '..', 'config', 'lane_servoing_hsv_config.yaml'))
+
+
+@app.route('/hsv', methods=['GET', 'POST'])
+def hsv_tuning():
+    return jsonify(handle_hsv_tuning(request, _HSV_CONFIG_FILE))
 
 # UI tuning bounds: (min, max)
 _TUNE_BOUNDS = {'speed': (0.05, 0.6), 'kp': (0.0, 1.0), 'kd': (0.0, 2.0)}
