@@ -160,7 +160,8 @@ def generate_frames():
             else:
                 display = visualize(frame)
             if frame is not None and not _agent_alive():
-                cv2.putText(display, 'AGENT PAUSED', (10, display.shape[0] - 12),
+                _ov = 'MANUAL CONTROL' if _manual_mode else 'AGENT PAUSED'
+                cv2.putText(display, _ov, (10, display.shape[0] - 12),
                             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 200, 255), 2)
             ret, jpeg = cv2.imencode('.jpg', display, [cv2.IMWRITE_JPEG_QUALITY, _STREAM_QUALITY])
             if ret:
@@ -209,6 +210,44 @@ def _stop_agent(timeout=3.0):
         return True, not _agent_thread.is_alive()
 
 
+# --- manual drive ------------------------------------------------------------
+# Manual mode stops the autonomous agent and drives the wheels straight from the
+# UI. A deadman watchdog zeroes the wheels if /drive stops arriving (closed tab,
+# stuck key) so the bot can never coast away on a stale command.
+_manual_mode      = False
+_last_manual_cmd  = 0.0
+_manual_watchdog  = None
+_MANUAL_TIMEOUT   = 0.6     # seconds of silence before the deadman cuts power
+_MANUAL_MAX       = 0.45    # forward/back wheel magnitude cap [-1, 1]
+_MANUAL_TURN      = 0.35    # turn differential added to each wheel
+
+
+def _zero_wheels():
+    if wheels is not None:
+        try:
+            wheels.set_wheels_speed(0.0, 0.0)
+        except Exception:
+            pass
+
+
+def _manual_watchdog_loop():
+    # Runs for the life of the process (daemon). NOTE: can't gate on stop_event
+    # here — entering manual mode sets it (to halt the agent), which would kill
+    # the watchdog exactly when it's needed. Gate on _manual_mode instead.
+    while True:
+        if _manual_mode and (time.time() - _last_manual_cmd) > _MANUAL_TIMEOUT:
+            _zero_wheels()
+        time.sleep(0.15)
+
+
+def _ensure_watchdog():
+    global _manual_watchdog
+    if _manual_watchdog is None or not _manual_watchdog.is_alive():
+        _manual_watchdog = threading.Thread(target=_manual_watchdog_loop,
+                                             daemon=True, name='ManualWatchdog')
+        _manual_watchdog.start()
+
+
 # --- routes ------------------------------------------------------------------
 
 @app.route('/')
@@ -245,6 +284,7 @@ def status():
     return jsonify({
         'agent': info,
         'agent_running': running,
+        'manual_mode': _manual_mode,
         'pose': pose,
         'game': game,
         'route': _ROUTE,
@@ -351,8 +391,57 @@ def tuning():
                    message='applied ' + ', '.join(f'{k}={v:g}' for k, v in applied.items()) + live_note)
 
 
+@app.route('/mode', methods=['GET', 'POST'])
+def mode():
+    """Toggle manual/autonomous drive. Manual stops the agent and hands the
+    wheels to /drive; autonomous restarts the agent."""
+    global _manual_mode, _last_manual_cmd
+    if request.method == 'GET':
+        return jsonify(manual=_manual_mode, agent_running=_agent_alive())
+    body = request.get_json(silent=True) or {}
+    want_manual = bool(body.get('manual'))
+    if want_manual == _manual_mode:
+        return jsonify(status='ok', manual=_manual_mode, message='no change')
+    if want_manual:
+        _stop_agent()                 # autonomy off; manual owns the wheels
+        _manual_mode = True
+        _last_manual_cmd = time.time()
+        _zero_wheels()
+        _ensure_watchdog()
+        return jsonify(status='ok', manual=True, message='manual control')
+    _manual_mode = False
+    _zero_wheels()
+    _start_agent()
+    return jsonify(status='ok', manual=False, message='autonomous')
+
+
+@app.route('/drive', methods=['POST'])
+def drive():
+    """Manual wheel command: {linear, angular} each in [-1, 1], mixed to L/R."""
+    global _last_manual_cmd
+    if not _manual_mode:
+        return jsonify(status='error', message='not in manual mode')
+    body = request.get_json(silent=True) or {}
+    try:
+        lin = max(-1.0, min(1.0, float(body.get('linear', 0.0))))
+        ang = max(-1.0, min(1.0, float(body.get('angular', 0.0))))
+    except (TypeError, ValueError):
+        return jsonify(status='error', message='bad drive values')
+    left  = max(-1.0, min(1.0, lin * _MANUAL_MAX + ang * _MANUAL_TURN))
+    right = max(-1.0, min(1.0, lin * _MANUAL_MAX - ang * _MANUAL_TURN))
+    if wheels is not None:
+        try:
+            wheels.set_wheels_speed(left, right)
+        except Exception as e:
+            return jsonify(status='error', message=f'drive failed: {e}')
+    _last_manual_cmd = time.time()
+    return jsonify(status='ok', left=round(left, 3), right=round(right, 3))
+
+
 @app.route('/agent/start', methods=['POST'])
 def agent_start():
+    if _manual_mode:
+        return jsonify(status='error', message='in manual mode — switch to autonomous first')
     started = _start_agent()
     return jsonify(status='ok', message='agent started' if started else 'agent already running')
 
@@ -382,6 +471,9 @@ def reset():
         # Drop state pushed before the respawn so /status can't serve a
         # pre-reset pose or a stale game_over.
         wheels.clear_state()
+    if _manual_mode:
+        _zero_wheels()                # respawned; stay under manual control
+        return jsonify(status='ok', message='simulation reset (manual)')
     _start_agent()
     return jsonify(status='ok', message='simulation reset')
 

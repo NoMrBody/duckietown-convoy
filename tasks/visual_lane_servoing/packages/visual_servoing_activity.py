@@ -22,13 +22,13 @@ _MAG_THRESHOLD = 40.0
 
 
 def detect_lane_markings(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
-    # Crop the top half (horizon) — only look at the road
+    # Crop the top (horizon) — only look at the road
     h, w = image.shape[:2]
     crop_top = int(h * 0.4)
     roi = image[crop_top:, :]
 
-    # Blur to reduce noise
-    blurred = cv2.GaussianBlur(roi, (5, 5), 2)
+    # Blur to reduce noise (kernel derived from _SIGMA)
+    blurred = cv2.GaussianBlur(roi, (0, 0), _SIGMA)
 
     # Convert to HSV
     hsv = cv2.cvtColor(blurred, cv2.COLOR_BGR2HSV)
@@ -36,6 +36,27 @@ def detect_lane_markings(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     # Color masks
     yellow_mask = cv2.inRange(hsv, _yellow_lower, _yellow_upper)
     white_mask  = cv2.inRange(hsv, _white_lower, _white_upper)
+
+    # Morphological opening: drop isolated speckle before it reaches the agent,
+    # which otherwise floods on the broad white range (bright road / glare).
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    yellow_mask = cv2.morphologyEx(yellow_mask, cv2.MORPH_OPEN, kernel)
+    white_mask  = cv2.morphologyEx(white_mask,  cv2.MORPH_OPEN, kernel)
+
+    # Edge gating. Pure color can't tell a line from bright road/glare, which
+    # share its low-saturation/high-value signature; a real line has a strong
+    # intensity gradient, flat road doesn't. Keep only color pixels that sit on
+    # a strong edge, and split by horizontal-gradient SIGN so the yellow (left)
+    # and white (right) detectors latch onto their own edge instead of the
+    # opposite marking. Sign uses x only — gating on the vertical sign too would
+    # prune the near-horizontal line segments seen in curves.
+    gray   = cv2.cvtColor(blurred, cv2.COLOR_BGR2GRAY)
+    sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
+    sobely = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
+    strong = np.sqrt(sobelx * sobelx + sobely * sobely) > _MAG_THRESHOLD
+
+    yellow_mask = np.where(strong & (sobelx < 0), yellow_mask, 0).astype(np.uint8)
+    white_mask  = np.where(strong & (sobelx > 0), white_mask,  0).astype(np.uint8)
 
     # Put masks back into full-size images
     full_yellow = np.zeros((h, w), dtype=np.uint8)

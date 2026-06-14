@@ -1,20 +1,18 @@
-# Lane HSV bounds, tuned from real-camera pixel samples (after the white-balance
-# fix) via the /video click-to-sample tool:
-#   yellow line: H=38 S=128 V=193     white line: H=77 S=30 V=169
-# Yellow is separated from the low-saturation floor by S_min; white by low S + high V.
-# June 2026: with the camera's pink cast the yellow line samples at H 13-18
-# (measured via /sample on the bot) — H floor lowered 25 -> 10 so the window
-# covers both the pink-cast and the white-balanced camera. Keep >= 10: below
-# that the red stop-line hue starts to bleed in.
+# Lane HSV bounds, tuned from real-camera /sample pixels (2026-06-14):
+#   yellow line: H=30 S=182 V=255  (px 17,399)
+#   white line:  H=0  S=0   V=255  (px 562,320)
+# Yellow is isolated from the low-S floor by S_min, kept above the red stop-line
+# hue (lower_h >= ~15) and below green (upper_h <= ~50). White is pure low-S /
+# high-V, so its hue is left unconstrained.
 white_lower_h: 0
 white_lower_s: 0
-white_lower_v: 140
+white_lower_v: 180
 white_upper_h: 179
 white_upper_s: 60
 white_upper_v: 255
-yellow_lower_h: 10
-yellow_lower_s: 70
-yellow_lower_v: 100
-yellow_upper_h: 50
+yellow_lower_h: 18
+yellow_lower_s: 80
+yellow_lower_v: 80
+yellow_upper_h: 45
 yellow_upper_s: 255
 yellow_upper_v: 255
