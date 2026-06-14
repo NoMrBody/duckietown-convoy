@@ -19,6 +19,26 @@ from launcher.ports import find_available_port, wait_for_port_file
 logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
+
+
+def _maybe_reexec_in_project_venv():
+    venv_dir = os.path.join(PROJECT_ROOT, '.venv')
+    if not os.path.isdir(venv_dir):
+        return
+    if os.name == 'nt':
+        venv_python = os.path.join(venv_dir, 'Scripts', 'python.exe')
+    else:
+        venv_python = os.path.join(venv_dir, 'bin', 'python')
+    if not os.path.isfile(venv_python):
+        return
+    try:
+        if os.path.abspath(sys.executable) != os.path.abspath(venv_python):
+            os.execv(venv_python, [venv_python] + sys.argv)
+    except OSError:
+        pass
+
+
+_maybe_reexec_in_project_venv()
 sys.path.insert(0, PROJECT_ROOT)
 
 GODOT_PROJECT = os.path.join(PROJECT_ROOT, 'GodotSimulation', 'ducky-bot')
