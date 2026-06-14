@@ -53,6 +53,40 @@ _EXTRA_CSS = '''
 .map-note { font-size: 11px; color: var(--text-muted); padding-top: 6px; min-height: 16px; }
 .hsv-hint { font-size: 12px; color: var(--text-secondary); margin-bottom: 8px; }
 .hsv-out { font-family: ui-monospace, monospace; font-size: 14px; min-height: 20px; }
+
+/* manual drive */
+.switch-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 4px 0 8px; font-size: 13px; color: var(--text-secondary);
+}
+.switch-row input { display: none; }
+.switch {
+    width: 42px; height: 22px; border-radius: 11px; cursor: pointer;
+    background: var(--bg-sidebar); border: 1px solid var(--border-color);
+    position: relative; transition: background .15s, border-color .15s;
+}
+.switch::after {
+    content: ''; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px;
+    border-radius: 50%; background: var(--text-muted); transition: transform .15s, background .15s;
+}
+.switch-row input:checked + .switch { background: var(--accent-blue); border-color: var(--accent-blue); }
+.switch-row input:checked + .switch::after { transform: translateX(20px); background: #fff; }
+.pad-hint { font-size: 11px; color: var(--text-muted); margin-bottom: 8px; }
+.pad-hint b { color: var(--text-secondary); font-family: ui-monospace, monospace; }
+.pad-grid {
+    display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: repeat(3, 42px);
+    gap: 6px; max-width: 174px; margin: 0 auto;
+    grid-template-areas: ". up ." "left mid right" ". down .";
+}
+.padbtn {
+    border: 1px solid var(--border-color); background: var(--bg-sidebar);
+    color: var(--text-primary); border-radius: 6px; font-size: 15px;
+    cursor: pointer; user-select: none; touch-action: none; transition: background .1s;
+}
+.padbtn:hover { background: var(--border-color); }
+.padbtn.active { background: var(--accent-blue); border-color: var(--accent-blue); color: #fff; }
+.padbtn.stop { color: var(--accent-red); }
+.padbtn.stop.active { background: var(--accent-red); border-color: var(--accent-red); color: #fff; }
 '''
 
 
@@ -72,6 +106,34 @@ def _state_panel(task):
                 <span class="gauge-label">close</span></div>
             <div class="kv"><span>Lateral</span><b id="kv-lateral">&mdash;</b></div>
             <div class="kv"><span>Sim</span><b id="kv-game">&mdash;</b></div>'''
+
+
+def _manual_card(task):
+    """Lead-only: switch between autonomous and manual drive + a D-pad. The
+    server exposes /mode (toggle) and /drive (linear/angular); a deadman
+    watchdog there stops the bot if commands stop arriving."""
+    if task != 'lead':
+        return ''
+    return '''
+            <div class="card" id="manual-card">
+                <div class="card-header">Drive control <span class="state-badge" id="mode-badge">autonomous</span></div>
+                <label class="switch-row">
+                    <span>Manual drive</span>
+                    <input type="checkbox" id="mode-toggle" onchange="setMode(this.checked)">
+                    <span class="switch"></span>
+                </label>
+                <div id="manual-pad" hidden>
+                    <div class="pad-hint">Hold a button or use <b>W A S D</b> / arrow keys &mdash; release to stop.</div>
+                    <div class="pad-grid">
+                        <button class="padbtn" data-dir="fwd"   style="grid-area:up">&#9650;</button>
+                        <button class="padbtn" data-dir="left"  style="grid-area:left">&#9664;</button>
+                        <button class="padbtn stop" data-dir="stop" style="grid-area:mid">&#9632;</button>
+                        <button class="padbtn" data-dir="right" style="grid-area:right">&#9654;</button>
+                        <button class="padbtn" data-dir="back"  style="grid-area:down">&#9660;</button>
+                    </div>
+                    <div class="status" id="manual-status"></div>
+                </div>
+            </div>'''
 
 
 # Live HSV knobs: (slider id, label, max). All min 0, step 1; ids map to the
@@ -110,6 +172,7 @@ def _content(task, sim=True):
                 <button class="button danger" onclick="resetSim()">Restart agent</button>
                 <div class="status" id="sim-status"></div>
             </div>''')
+    manual_card = _manual_card(task)
     return f'''
     <div class="container">
         <div class="video-section">
@@ -125,7 +188,7 @@ def _content(task, sim=True):
                     <div class="stat-box"><div class="stat-value" id="stat-wheels">&mdash;</div><div class="stat-label">L / R wheels</div></div>
                     <div class="stat-box"><div class="stat-value" id="stat-fps">0</div><div class="stat-label">Agent FPS</div></div>
                 </div>{_state_panel(task)}
-            </div>
+            </div>{manual_card}
             <div class="card">
                 <div class="card-header">Track map <span class="state-badge" id="pose-source">no pose</span></div>
                 <canvas id="map-canvas"></canvas>
@@ -189,16 +252,22 @@ const STATE_COLORS = {
 const ROUTE_GLYPHS = { straight: '\\u2191', left: '\\u2190', right: '\\u2192', stop: '\\u25A0' };
 
 let agentRunning = true;
+let manualMode = false;
 let leaderCfg = null;
 
 function setText(id, text) { document.getElementById(id).textContent = text; }
 
 function updateAgentPanel(d) {
     const a = d.agent || {};
+    if (TASK === 'lead' && d.manual_mode !== undefined) applyMode(d.manual_mode);
     const badge = document.getElementById('state-badge');
     const state = a.state || 'INIT';
-    badge.textContent = d.agent_running ? state : 'PAUSED';
-    badge.style.color = d.agent_running ? (STATE_COLORS[state] || 'var(--text-secondary)') : 'var(--text-muted)';
+    if (manualMode) {
+        badge.textContent = 'MANUAL'; badge.style.color = 'var(--accent-blue)';
+    } else {
+        badge.textContent = d.agent_running ? state : 'PAUSED';
+        badge.style.color = d.agent_running ? (STATE_COLORS[state] || 'var(--text-secondary)') : 'var(--text-muted)';
+    }
     setText('stat-speed', (a.base_speed || 0).toFixed(2));
     setText('stat-steer', ((a.steering || 0) >= 0 ? '+' : '') + (a.steering || 0).toFixed(2));
     setText('stat-wheels', (a.left_speed || 0).toFixed(2) + ' / ' + (a.right_speed || 0).toFixed(2));
@@ -218,7 +287,8 @@ function updateAgentPanel(d) {
     }
 
     agentRunning = !!d.agent_running;
-    document.getElementById('btn-agent').textContent = agentRunning ? 'Pause agent' : 'Start agent';
+    document.getElementById('btn-agent').textContent =
+        manualMode ? 'Manual mode' : (agentRunning ? 'Pause agent' : 'Start agent');
 
     if (TASK === 'lead') updateLeadPanel(d, a); else updateFollowPanel(d, a);
 }
@@ -403,6 +473,98 @@ cam.addEventListener('click', async (e) => {
         out.textContent = 'H ' + d.h + '  S ' + d.s + '  V ' + d.v + '  (px ' + d.px + ',' + d.py + ')';
     } catch (err) { out.style.color = 'var(--accent-red)'; out.textContent = 'sample failed'; }
 });
+
+// --- manual drive (lead only) ------------------------------------------------
+// A switch toggles /mode; while manual, held keys/buttons stream a (linear,
+// angular) vector to /drive at ~8 Hz. Releasing everything sends one zero. The
+// server's deadman watchdog also stops the bot if this stream stalls.
+const active = new Set();        // currently-held directions
+let driveTimer = null;
+
+function applyMode(manual) {
+    manualMode = !!manual;
+    const tgl = document.getElementById('mode-toggle');
+    const pad = document.getElementById('manual-pad');
+    const badge = document.getElementById('mode-badge');
+    const agentBtn = document.getElementById('btn-agent');
+    if (tgl && document.activeElement !== tgl) tgl.checked = manualMode;
+    if (pad) pad.hidden = !manualMode;
+    if (badge) badge.textContent = manualMode ? 'manual' : 'autonomous';
+    if (agentBtn) { agentBtn.disabled = manualMode; agentBtn.style.opacity = manualMode ? '0.5' : ''; }
+    if (!manualMode && active.size) { active.clear(); stopDriveLoop(); }
+}
+
+async function setMode(manual) {
+    applyMode(manual);                                   // optimistic
+    const r = await postJSON('/mode', { manual: !!manual });
+    if (r && typeof r.manual === 'boolean') applyMode(r.manual);
+    showStatus('manual-status', r.message || '', r.status === 'ok' ? 'success' : 'error');
+}
+
+function driveVector() {
+    let linear = 0, angular = 0;
+    if (active.has('fwd'))   linear  += 1;
+    if (active.has('back'))  linear  -= 1;
+    if (active.has('right')) angular += 1;
+    if (active.has('left'))  angular -= 1;
+    return { linear, angular };
+}
+
+async function sendDrive() {
+    if (!manualMode) return;
+    try { await postJSON('/drive', driveVector()); } catch (e) { /* keep trying */ }
+}
+
+function startDriveLoop() {
+    if (driveTimer || !manualMode) return;
+    sendDrive();
+    driveTimer = setInterval(sendDrive, 120);
+}
+function stopDriveLoop() {
+    if (driveTimer) { clearInterval(driveTimer); driveTimer = null; }
+}
+
+function addDir(dir) {
+    if (!manualMode) return;
+    if (dir === 'stop') { active.clear(); stopDriveLoop(); sendDrive(); return; }
+    active.add(dir);
+    startDriveLoop();
+}
+function removeDir(dir) {
+    active.delete(dir);
+    if (active.size === 0) { stopDriveLoop(); sendDrive(); }   // final zero
+}
+
+const KEYDIR = { w: 'fwd', s: 'back', a: 'left', d: 'right',
+                 arrowup: 'fwd', arrowdown: 'back', arrowleft: 'left', arrowright: 'right' };
+
+if (TASK === 'lead') {
+    const typing = (e) => e.target && e.target.tagName === 'INPUT';  // don't hijack slider arrows
+    window.addEventListener('keydown', (e) => {
+        if (!manualMode || typing(e)) return;
+        const dir = KEYDIR[e.key.toLowerCase()];
+        if (!dir) return;
+        e.preventDefault();
+        if (!e.repeat) addDir(dir);
+    });
+    window.addEventListener('keyup', (e) => {
+        if (typing(e)) return;
+        const dir = KEYDIR[e.key.toLowerCase()];
+        if (dir) { e.preventDefault(); removeDir(dir); }
+    });
+    // Safety: drop control if the page loses focus or is hidden.
+    window.addEventListener('blur', () => { if (active.size) { active.clear(); stopDriveLoop(); sendDrive(); } });
+
+    document.querySelectorAll('.padbtn').forEach((btn) => {
+        const dir = btn.dataset.dir;
+        const press   = (e) => { e.preventDefault(); btn.classList.add('active');    addDir(dir); };
+        const release = (e) => { e.preventDefault(); btn.classList.remove('active'); if (dir !== 'stop') removeDir(dir); };
+        btn.addEventListener('pointerdown', press);
+        btn.addEventListener('pointerup', release);
+        btn.addEventListener('pointerleave', release);
+        btn.addEventListener('pointercancel', release);
+    });
+}
 '''
 
 _JS_MAP = '''
