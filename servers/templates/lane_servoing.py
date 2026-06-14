@@ -20,12 +20,19 @@ _EXTRA_CSS = '''
 .hsv-section-title { font-size: 13px; font-weight: 600; color: var(--text-secondary); margin: 12px 0 8px; text-transform: uppercase; letter-spacing: 0.5px; }
 .hsv-section-title.yellow { color: #f1c40f; }
 .hsv-section-title.white  { color: #ecf0f1; }
+.hsv-sampler { background: var(--bg-sidebar); border: 1px solid var(--border-color); border-radius: 6px; padding: 10px 12px; margin-bottom: 16px; }
+.hsv-hint { font-size: 12px; color: var(--text-secondary); line-height: 1.4; margin-bottom: 8px; }
+.hsv-out { font-family: ui-monospace, monospace; font-size: 15px; font-weight: 600; min-height: 20px; color: var(--text-secondary); }
+.hsv-samples { font-family: ui-monospace, monospace; font-size: 12px; color: var(--text-muted); margin-top: 8px; line-height: 1.5; min-height: 16px; }
+.hsv-range { font-family: ui-monospace, monospace; font-size: 12px; color: var(--accent-blue); margin-top: 8px; line-height: 1.5; }
+.hsv-clear { width: auto; padding: 4px 10px; font-size: 11px; margin-top: 8px; background: var(--bg-darker); }
+.hsv-clear:hover { background: var(--border-color); }
 '''
 
 _CONTENT = '''
     <div class="container">
         <div class="video-section">
-            <img src="{{ url_for('video') }}" class="stream" alt="Lane Servoing Stream">
+            <img id="cam" src="{{ url_for('video') }}" class="stream" alt="Lane Servoing Stream" style="cursor:crosshair">
         </div>
 
         <div class="controls-section">
@@ -33,6 +40,16 @@ _CONTENT = '''
             <!-- HSV Calibration card -->
             <div class="card">
                 <div class="card-header">HSV Color Calibration</div>
+
+                <div class="hsv-sampler">
+                    <div class="hsv-hint">Click the <b>Camera</b> panel (top-left of the video) to read the
+                        exact H/S/V under the cursor. Click several pixels along a line and use the
+                        min&ndash;max range below to set its bounds.</div>
+                    <div class="hsv-out" id="hsv-out">&mdash;</div>
+                    <div class="hsv-samples" id="hsv-samples"></div>
+                    <div class="hsv-range" id="hsv-range"></div>
+                    <button class="button hsv-clear" onclick="clearSamples()">Clear samples</button>
+                </div>
 
                 <div class="hsv-section-title yellow">Yellow Line (left / dashed)</div>
 
@@ -260,6 +277,56 @@ document.getElementById('const').oninput = function() {
         .then(() => showStatus('config-status', 'Config Updated!', 'success'))
         .catch(() => showStatus('config-status', 'Update Failed!', 'error'));
     }
+
+    // --- click-to-sample HSV (Camera = top-left panel of the montage) ---------
+    // .stream is object-fit:contain, so the frame is letterboxed inside the
+    // element; map the click through the contained content rect, then let
+    // /sample turn the montage fraction into a raw-frame pixel.
+    const cam    = document.getElementById('cam');
+    const hsvOut = document.getElementById('hsv-out');
+    let hsvSamples = [];
+
+    function renderSamples() {
+        const list = document.getElementById('hsv-samples');
+        list.innerHTML = hsvSamples.slice(-8).reverse()
+            .map(s => 'H ' + s.h + '  S ' + s.s + '  V ' + s.v).join('<br>');
+        const rng = document.getElementById('hsv-range');
+        if (!hsvSamples.length) { rng.textContent = ''; return; }
+        const span = c => {
+            const vals = hsvSamples.map(s => s[c]);
+            return [Math.min(...vals), Math.max(...vals)];
+        };
+        const [hl, hh] = span('h'), [sl, sh] = span('s'), [vl, vh] = span('v');
+        rng.innerHTML = 'range (' + hsvSamples.length + '): '
+            + 'H ' + hl + '-' + hh + '   S ' + sl + '-' + sh + '   V ' + vl + '-' + vh;
+    }
+
+    function clearSamples() {
+        hsvSamples = [];
+        renderSamples();
+        hsvOut.style.color = 'var(--text-secondary)';
+        hsvOut.innerHTML = '&mdash;';
+    }
+
+    cam.addEventListener('click', async (e) => {
+        const r = cam.getBoundingClientRect();
+        const iw = cam.naturalWidth, ih = cam.naturalHeight;
+        if (!iw || !ih) return;
+        const sc = Math.min(r.width / iw, r.height / ih);
+        const dw = iw * sc, dh = ih * sc;
+        const fx = (e.clientX - r.left - (r.width - dw) / 2) / dw;
+        const fy = (e.clientY - r.top - (r.height - dh) / 2) / dh;
+        if (fx < 0 || fx > 1 || fy < 0 || fy > 1) return;  // clicked a letterbox bar
+        try {
+            const d = await (await fetch('/sample?fx=' + fx.toFixed(4) + '&fy=' + fy.toFixed(4))).json();
+            if (d.hint)  { hsvOut.style.color = 'var(--accent-orange)'; hsvOut.textContent = d.hint; return; }
+            if (d.error) { hsvOut.style.color = 'var(--accent-red)';    hsvOut.textContent = d.error; return; }
+            hsvOut.style.color = 'var(--accent-green)';
+            hsvOut.textContent = 'H ' + d.h + '   S ' + d.s + '   V ' + d.v + '   (px ' + d.px + ',' + d.py + ')';
+            hsvSamples.push({h: d.h, s: d.s, v: d.v});
+            renderSamples();
+        } catch (err) { hsvOut.style.color = 'var(--accent-red)'; hsvOut.textContent = 'sample failed'; }
+    });
 '''
 
 LANE_SERVOING_TEMPLATE = render_template(
