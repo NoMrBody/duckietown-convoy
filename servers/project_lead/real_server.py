@@ -296,6 +296,8 @@ def _agent_alive():
 def _start_agent():
     global _agent_thread
     with _agent_lock:
+        if camera is None:
+            return False          # nothing to read; web UI still serves the page
         if _agent_alive():
             return False
         stop_event.clear()
@@ -609,8 +611,12 @@ def main():
         leds = None
 
     print('\n[2/5] Initializing wheels driver...')
-    wheels = DaguWheelsDriver(WheelPWMConfiguration(), WheelPWMConfiguration())
-    print('  Wheels: ok')
+    try:
+        wheels = DaguWheelsDriver(WheelPWMConfiguration(), WheelPWMConfiguration())
+        print('  Wheels: ok')
+    except Exception as e:
+        print(f'  Wheels: not available ({e}) — drive disabled, web UI still served')
+        wheels = None
 
     print('\n[3/5] Initializing wheel encoders (optional)...')
     try:
@@ -622,13 +628,23 @@ def main():
         encoders = None
 
     print('\n[4/5] Initializing camera driver...')
-    camera = CameraDriver()
-    camera.start()
-    print('  Camera: ok')
+    try:
+        camera = CameraDriver()
+        camera.start()
+        print('  Camera: ok')
+    except Exception as e:
+        print(f'  Camera: not available ({e}) — web UI still served, '
+              'video shows "Waiting for camera..."')
+        print('         check nvargus-daemon and that no other process holds the camera')
+        camera = None
 
     print('\n[5/5] Starting lead agent...')
-    _start_agent()
-    print('  agent.main() running')
+    if camera is None:
+        print('  Skipped: no camera — fix it and reload, or restart the server')
+    elif _start_agent():
+        print('  agent.main() running')
+    else:
+        print('  agent not started')
 
     def _shutdown(signum, frame):
         print('\nShutting down...')
