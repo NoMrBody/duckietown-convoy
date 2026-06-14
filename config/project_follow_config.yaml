@@ -41,8 +41,16 @@ reacquire_heading_gain: 0.0   # best-effort tilt feed-forward; off by default (n
 # --- pursuit turn: mimic the leader's corner instead of cutting toward it ---
 turn_lateral_min:       0.18  # marker swept this far off-center at the loss => the leader turned
 turn_heading_min:       0.06  # |perspective heading| in the last sightings => the leader turned
-                              # (FOLLOW keeps the marker centered, so lateral rarely fires;
-                              #  sim-calibrated sign: negative heading = leader yawing right)
+                              # (FOLLOW keeps the marker centered, so lateral rarely fires)
+turn_lane_steer_min:    0.06  # |lane steering| while following => infer corner from the lane
+                              # curve when the marker stays centered (real-bot default path)
+turn_use_heading:       false # the perspective heading cue is noisy/unreliable on the real bot
+                              # (it made the follower rotate the wrong way on slight turns) =>
+                              # ignore it and rely on the lateral-sweep cue, which keeps a
+                              # consistent sign. A slight turn then just keeps lane-following.
+turn_heading_sign:      -1.0  # only used when turn_use_heading is true: maps the producer's
+                              # heading sign onto this camera (producer: +heading = leader right).
+                              # Flip this and set turn_use_heading: true once validated on hardware.
 span_to_dist_k:         13.5  # camera-to-board distance from span: d = k / span_px
                               # (k = focal_px * dot spacing; Godot fov 75 deg is VERTICAL ->
                               #  f = 240/tan(37.5) = 313 px, * 0.042 m — FIELD-TUNE for real)
@@ -59,7 +67,9 @@ post_turn_settle_s:     3.0   # hold still after the turn so the tailgated leade
                               # away into detection range (grid must FIT in the frame)
 
 # --- lane fallback ---
-lane_healthy_min_pixels: 500
+# Align with lane_servoing_config detection_threshold (100): the FSM only
+# needs enough pixels for the lane agent to steer, not a huge mask.
+lane_healthy_min_pixels: 150
 
 # --- chain signal ---
 rear_led_indices: [3, 4]   # lit red while following, for any further follower

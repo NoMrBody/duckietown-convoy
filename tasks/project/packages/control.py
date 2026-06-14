@@ -23,6 +23,19 @@ def apply_leds(leds, d: Decision) -> None:
             pass
 
 
+def blink_all(leds, color, now, hz=2.0) -> None:
+    """Blink all LEDs at `hz`. `color` is RGB in [0,1]; off on the dark phase."""
+    if leds is None:
+        return
+    on = int(now * hz * 2) % 2 == 0
+    rgb = list(color) if on else [0.0, 0.0, 0.0]
+    for idx in (0, 2, 3, 4):
+        try:
+            leds.set_rgb(idx, rgb)
+        except Exception:
+            pass
+
+
 def _clip01(x: float) -> float:
     if x < 0.0:
         return 0.0

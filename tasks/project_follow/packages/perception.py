@@ -56,10 +56,15 @@ class FollowPerception:
         left, right = self.lane.compute_commands(frame_rgb)
         debug = self.lane.last_debug_info
         lane_pixels = int(debug.get("total_lane_pixels", 0))
+        lane_detected = bool(debug.get("lane_detected", False))
+        # Match the lane agent's own recovery gate (detection_threshold) so the
+        # FSM "healthy" flag agrees with whether the agent is actually steering.
+        healthy = lane_detected and lane_pixels >= self.lane_healthy_min_pixels
         return LaneObs(
             steering_suggestion=(right - left) / 2.0,
             base_speed_suggestion=(left + right) / 2.0,
             lane_pixels=lane_pixels,
             is_curve=bool(debug.get("is_curve", False)),
-            healthy=lane_pixels >= self.lane_healthy_min_pixels,
+            healthy=healthy,
+            curve_dir=int(debug.get("curve_dir", 0)),
         )

@@ -43,6 +43,8 @@ class LaneObs:
     lane_pixels: int
     is_curve: bool
     healthy: bool
+    # Signed bend magnitude from the lane agent; positive => road curves left.
+    curve_dir: int = 0
 
 
 @dataclass

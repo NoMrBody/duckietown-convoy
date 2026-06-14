@@ -29,24 +29,26 @@ INDEX_HTML = """<!doctype html>
   body { margin:0; background:#111; color:#eee; font-family:sans-serif; }
   header { padding:12px 16px; background:#1a1a1a; border-bottom:1px solid #333; }
   header .hint { color:#888; font-size:13px; font-weight:normal; }
-  main { display:flex; justify-content:center; padding:16px; }
-  img.stream { max-width:100%; height:auto; border:1px solid #333; background:#000; cursor:crosshair; }
-  #hsv { text-align:center; font-family:monospace; font-size:18px; padding:6px; min-height:22px; }
-  #log { max-width:640px; margin:0 auto; font-family:monospace; font-size:12px; color:#9bd; }
-  #controls { text-align:center; padding:10px; }
+  main { display:flex; flex-wrap:wrap; align-items:flex-start; justify-content:center; gap:16px; padding:16px; }
+  .cam-col { flex:1 1 420px; max-width:640px; min-width:300px; }
+  .side-col { flex:1 1 360px; max-width:520px; min-width:300px; }
+  img.stream { display:block; width:100%; height:auto; border:1px solid #333; background:#000; cursor:crosshair; }
+  #hsv { text-align:center; font-family:monospace; font-size:16px; padding:6px; min-height:22px; }
+  #log { margin:8px 0 0; font-family:monospace; font-size:12px; color:#9bd; }
+  #controls { text-align:center; padding:0 0 8px; }
   #controls button { font-size:14px; padding:8px 18px; margin:0 6px; border:none; border-radius:4px; cursor:pointer; color:#fff; }
   #controls button:disabled { opacity:0.4; cursor:not-allowed; }
   #btnStop  { background:#a33; }
   #btnStart { background:#3a3; }
-  #agentMsg { text-align:center; font-family:monospace; font-size:13px; min-height:18px; color:#ccc; }
-  #speedPanel { max-width:560px; margin:8px auto 0; padding:10px 14px; background:#1a1a1a; border:1px solid #333; border-radius:6px; }
+  #agentMsg { text-align:center; font-family:monospace; font-size:13px; min-height:18px; color:#ccc; margin-bottom:8px; }
+  #speedPanel { margin:0 0 12px; padding:10px 14px; background:#1a1a1a; border:1px solid #333; border-radius:6px; }
   #speedPanel h3 { margin:0 0 4px; font-size:14px; }
   #speedPanel .hint { color:#888; font-size:12px; margin-bottom:8px; }
   .speed-row { display:flex; align-items:center; gap:10px; font-family:monospace; font-size:13px; }
   .speed-row input[type=range] { flex:1; }
   .speed-row .v { width:46px; text-align:right; color:#8f8; font-size:15px; }
   #speedMsg { font-family:monospace; font-size:12px; min-height:16px; color:#8f8; margin-top:6px; }
-  #hsvPanel { max-width:560px; margin:8px auto 0; padding:10px 14px; background:#1a1a1a; border:1px solid #333; border-radius:6px; }
+  #hsvPanel { margin:0 0 12px; padding:10px 14px; background:#1a1a1a; border:1px solid #333; border-radius:6px; }
   #hsvPanel h3 { margin:0 0 4px; font-size:14px; }
   #hsvPanel .hint { color:#888; font-size:12px; margin-bottom:8px; }
   .hsv-group { margin-bottom:8px; }
@@ -59,29 +61,35 @@ INDEX_HTML = """<!doctype html>
 </style></head>
 <body>
   <header>Convoy — Follower Bot &nbsp;<span class="hint">click the line in the top-left camera panel to read its H/S/V</span></header>
-  <main><img id="cam" class="stream" src="/video" alt="camera"></main>
-  <div id="controls">
-    <button id="btnStop">Stop Agent</button>
-    <button id="btnStart">Start Agent</button>
-  </div>
-  <div id="agentMsg"></div>
-  <div id="speedPanel">
-    <h3>Cruise speed <span style="color:#8f8;font-size:11px;">(live)</span></h3>
-    <div class="hint">Sets the follower's cruise speed. Applies to the running FSM instantly and saves to the config. State machine still tapers toward 0 as it nears the leader and uses its own pursuit/turn speeds.</div>
-    <div class="speed-row">
-      <input type="range" id="speedRange" min="0.05" max="0.6" step="0.01" value="0.3">
-      <span class="v" id="speedVal">0.30</span>
+  <main>
+    <div class="cam-col">
+      <img id="cam" class="stream" src="/video" alt="camera">
+      <div id="hsv"></div>
     </div>
-    <div id="speedMsg"></div>
-  </div>
-  <div id="hsvPanel">
-    <h3>Lane HSV tuning <span style="color:#8f8;font-size:11px;">(live)</span></h3>
-    <div class="hint">Sliders apply to the running yellow/white lane detector instantly &mdash; watch the mask panels &mdash; and save to the config. Click the camera panel to sample a pixel's H/S/V, then bracket the bounds around it.</div>
-    <div id="hsvSliders"></div>
-    <div id="hsvMsg"></div>
-  </div>
-  <div id="hsv"></div>
-  <div id="log"></div>
+    <div class="side-col">
+      <div id="controls">
+        <button id="btnStop">Stop Agent</button>
+        <button id="btnStart">Start Agent</button>
+      </div>
+      <div id="agentMsg"></div>
+      <div id="speedPanel">
+        <h3>Cruise speed <span style="color:#8f8;font-size:11px;">(live)</span></h3>
+        <div class="hint">Sets the follower's cruise speed. Applies to the running FSM instantly and saves to the config. State machine still tapers toward 0 as it nears the leader and uses its own pursuit/turn speeds.</div>
+        <div class="speed-row">
+          <input type="range" id="speedRange" min="0.05" max="0.6" step="0.01" value="0.3">
+          <span class="v" id="speedVal">0.30</span>
+        </div>
+        <div id="speedMsg"></div>
+      </div>
+      <div id="hsvPanel">
+        <h3>Lane HSV tuning <span style="color:#8f8;font-size:11px;">(live)</span></h3>
+        <div class="hint">Sliders apply to the running yellow/white lane detector instantly &mdash; watch the mask panels &mdash; and save to the config. Click the camera panel to sample a pixel's H/S/V, then bracket the bounds around it.</div>
+        <div id="hsvSliders"></div>
+        <div id="hsvMsg"></div>
+      </div>
+      <div id="log"></div>
+    </div>
+  </main>
 <script>
   const img = document.getElementById('cam');
   const out = document.getElementById('hsv');
@@ -259,6 +267,15 @@ _debug_info = {}
 _latest_frame = None
 _latest_frame_lock = threading.Lock()
 
+# While the agent runs, it is the only thing pumping the camera; when it is
+# stopped nothing reads frames and the stream would freeze on "Waiting for
+# frames...". Pull straight from the camera instead so the live view (and the
+# HSV sampler) keep working while the bot is halted. Locked because several
+# /video clients run generate_frames() concurrently and the camera must not be
+# read from two places at once. This path only runs while the agent is stopped,
+# so it never races the agent's own camera.read().
+_direct_read_lock = threading.Lock()
+
 # Display stream: downscale + lower JPEG quality so frames are ~4x smaller over
 # wifi (cuts latency), and always send the freshest frame (drain the queue).
 _STREAM_SIZE = (480, 360)   # (width, height) of the streamed image
@@ -361,11 +378,64 @@ def visualize(frame_bgr):
     return display
 
 
+def _read_camera_direct():
+    """Grab a fresh frame straight from the camera while the agent is paused.
+    Serialized so concurrent /video clients don't read the device at once."""
+    if camera is None:
+        return None
+    try:
+        with _direct_read_lock:
+            ok, frame = camera.read()
+        if ok and frame is not None:
+            return frame
+    except Exception:
+        pass
+    return None
+
+
+def _encode_frame(display):
+    ret, jpeg = cv2.imencode('.jpg', display, [cv2.IMWRITE_JPEG_QUALITY, _STREAM_QUALITY])
+    if not ret:
+        return None
+    return (b'--frame\r\n'
+            b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
+
+
+def _render_frame(frame):
+    if _SHOW_MASKS and _MASKS_AVAILABLE:
+        return _montage(frame)
+    return visualize(cv2.resize(frame, _STREAM_SIZE, interpolation=cv2.INTER_AREA))
+
+
 def generate_frames():
     import time
     global _latest_frame
     while True:
         try:
+            # Agent stopped: it no longer pumps frames, so read the camera here
+            # and keep the live view + HSV sampler alive while the bot is halted.
+            if not _agent_alive():
+                frame = _read_camera_direct()
+                if frame is None:
+                    blank = np.zeros((_STREAM_SIZE[1], _STREAM_SIZE[0], 3), dtype=np.uint8)
+                    cv2.putText(blank, "Waiting for camera...", (90, _STREAM_SIZE[1] // 2),
+                                cv2.FONT_HERSHEY_SIMPLEX, 0.7, (80, 80, 80), 2)
+                    chunk = _encode_frame(blank)
+                    if chunk:
+                        yield chunk
+                    time.sleep(0.05)
+                    continue
+                with _latest_frame_lock:
+                    _latest_frame = frame
+                display = _render_frame(frame)
+                cv2.putText(display, "AGENT STOPPED", (10, display.shape[0] - 12),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 200, 255), 2)
+                chunk = _encode_frame(display)
+                if chunk:
+                    yield chunk
+                time.sleep(0.05)
+                continue
+
             frame = _frame_queue.get(timeout=0.5)
             # Drain to the freshest queued frame so the stream never lags behind.
             while True:
@@ -375,23 +445,17 @@ def generate_frames():
                     break
             with _latest_frame_lock:
                 _latest_frame = frame
-            if _SHOW_MASKS and _MASKS_AVAILABLE:
-                display = _montage(frame)
-            else:
-                display = visualize(cv2.resize(frame, _STREAM_SIZE, interpolation=cv2.INTER_AREA))
-            ret, jpeg = cv2.imencode('.jpg', display, [cv2.IMWRITE_JPEG_QUALITY, _STREAM_QUALITY])
-            if not ret:
-                continue
-            yield (b'--frame\r\n'
-                   b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
+            display = _render_frame(frame)
+            chunk = _encode_frame(display)
+            if chunk:
+                yield chunk
         except queue.Empty:
             blank = np.zeros((_STREAM_SIZE[1], _STREAM_SIZE[0], 3), dtype=np.uint8)
             cv2.putText(blank, "Waiting for frames...", (110, _STREAM_SIZE[1] // 2),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (80, 80, 80), 2)
-            ret, jpeg = cv2.imencode('.jpg', blank, [cv2.IMWRITE_JPEG_QUALITY, _STREAM_QUALITY])
-            if ret:
-                yield (b'--frame\r\n'
-                       b'Content-Type: image/jpeg\r\n\r\n' + jpeg.tobytes() + b'\r\n')
+            chunk = _encode_frame(blank)
+            if chunk:
+                yield chunk
             time.sleep(0.05)
         except Exception as e:
             print(f'[VideoStream] Error: {e}')

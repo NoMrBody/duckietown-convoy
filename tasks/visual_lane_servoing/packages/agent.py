@@ -44,12 +44,13 @@ def detect_lines_in_slices(
 
     The road has white lines on BOTH outer edges; a plain mean over all white
     pixels lands between them (left of our lane's edge) and steers the bot
-    onto the left lane. Take the rightmost cluster instead — and when all
-    white sits left of the yellow centerline, it is the opposite road edge,
-    not ours: drop the slice.
+    onto the left lane. Pick the lane-edge cluster on the correct side of the
+    yellow centerline: when yellow is right-of-center the edge is the leftmost
+    white cluster; when yellow is left-of-center it is the rightmost.
     """
     slice_height = int(h * 0.35 / _NUM_SLICES)
     start_y      = int(h * _ROI_START)
+    w            = mask_white.shape[1]
     yellow_xs, white_xs = [], []
 
     for i in range(_NUM_SLICES):
@@ -64,9 +65,14 @@ def detect_lines_in_slices(
         clusters = _cluster_means(np.where(strip_w > 0)[1])
         white_x  = None
         if clusters:
-            white_x = int(clusters[-1])
-            if yellow_x is not None and white_x <= yellow_x:
-                white_x = None
+            if yellow_x is not None and yellow_x >= int(w * 0.55):
+                white_x = int(clusters[0])
+                if white_x >= yellow_x:
+                    white_x = None
+            else:
+                white_x = int(clusters[-1])
+                if yellow_x is not None and white_x <= yellow_x:
+                    white_x = None
         white_xs.append(white_x)
 
     return _near_anchored(yellow_xs), _near_anchored(white_xs)

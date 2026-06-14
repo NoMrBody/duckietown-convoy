@@ -1,18 +1,20 @@
 # Lane HSV bounds, tuned from real-camera /sample pixels (2026-06-14):
 #   yellow line: H=30 S=182 V=255  (px 17,399)
 #   white line:  H=0  S=0   V=255  (px 562,320)
-# Yellow is isolated from the low-S floor by S_min, kept above the red stop-line
-# hue (lower_h >= ~15) and below green (upper_h <= ~50). White is pure low-S /
-# high-V, so its hue is left unconstrained.
+# White: keep S_max LOW — gray road reads H~155 S~48-81 and flooded the mask when
+# S_max was 100. Shadowed tape uses a separate tinted band in the detector (edge-
+# gated only). Yellow: distinctive hue; S floor low for desaturated dash centers.
 white_lower_h: 0
 white_lower_s: 0
-white_lower_v: 180
+white_lower_v: 120
 white_upper_h: 179
-white_upper_s: 60
+white_upper_s: 55
 white_upper_v: 255
-yellow_lower_h: 18
-yellow_lower_s: 80
-yellow_lower_v: 80
-yellow_upper_h: 45
+# Yellow: widen hue for camera tint; low S/V floors for dim dashes on dark road.
+# Pale-dash band is OR-ed in the detector (see _PALE_YELLOW_*).
+yellow_lower_h: 8
+yellow_lower_s: 25
+yellow_lower_v: 45
+yellow_upper_h: 65
 yellow_upper_s: 255
 yellow_upper_v: 255

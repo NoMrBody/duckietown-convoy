@@ -48,12 +48,21 @@ def test_speck_rejected():
 
 
 def test_white_left_of_yellow_discarded():
-    # Everything white left of the centerline is the opposite road edge.
+    # Yellow left-of-center: white left of yellow is the opposite road edge.
     yellow = _mask((295, 306))
     white = _mask((100, 116))
     yellow_xs, white_xs = detect_lines_in_slices(yellow, white, H)
     assert yellow_xs == [300, 300, 300]
     assert white_xs == [None, None, None]
+
+
+def test_white_left_of_right_yellow_kept():
+    # Yellow right-of-center: lane edge is the left white line (inverted layout).
+    yellow = _mask((495, 516))
+    white = _mask((140, 156))
+    yellow_xs, white_xs = detect_lines_in_slices(yellow, white, H)
+    assert yellow_xs == [507, 507, 507]
+    assert white_xs == [148, 148, 148]
 
 
 def test_lists_stay_aligned():

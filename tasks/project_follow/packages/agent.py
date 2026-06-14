@@ -4,13 +4,17 @@ import time
 
 import yaml
 
-from tasks.project.packages.control import apply_leds, motors_from_decision
+from tasks.project.packages.control import apply_leds, blink_all, motors_from_decision
 from tasks.project_follow.packages.fsm import STATE_TURN, FollowerFSM
 from tasks.project_follow.packages.perception import FollowPerception
 
 _CONFIG_FILE = os.path.normpath(
     os.path.join(os.path.dirname(__file__), "..", "..", "..", "config", "project_follow_config.yaml")
 )
+
+# Consecutive failed camera reads before we treat the bot as blind and stop +
+# blink red. A small grace avoids flicker on a single transient miss.
+CAM_LOSS_GRACE = 3
 
 
 def _load_cfg() -> dict:
@@ -41,12 +45,21 @@ def main(camera, wheels, leds, stop_event,
     frame_count = 0
     fps = 0.0
     cam_fail = 0
+    last_frame_obj = None   # identity of the last fresh frame, to catch stale repeats
     in_maneuver = False
     man_pose0 = None   # pose at pursuit-turn entry (sim pose-odometry)
 
     try:
         while not stop_event.is_set():
             ok, frame = camera.read()
+            # The camera driver masks brief outages by handing back the SAME
+            # last frame with ok=True (see camera_driver_abs.read). Driving on a
+            # frozen image is still blind, so treat a repeated frame as a loss
+            # and route it through the stop+blink path below.
+            if ok and frame is not None and frame is last_frame_obj:
+                ok = False
+            elif ok and frame is not None:
+                last_frame_obj = frame
             if not ok:
                 cam_fail += 1
                 if cam_fail == 5:
@@ -61,11 +74,26 @@ def main(camera, wheels, leds, stop_event,
                         camera.start()
                     except Exception as e:
                         print(f"[follow] camera re-init failed: {e}")
+                # Blind: actively stop and blink red so the bot never coasts off
+                # the track on a stale command while it can't see.
+                if cam_fail >= CAM_LOSS_GRACE:
+                    try:
+                        wheels.set_wheels_speed(0.0, 0.0)
+                    except OSError as e:
+                        if time.monotonic() - last_hw_warn > 2.0:
+                            print(f"[follow] wheels I/O error during camera-loss stop: {e}")
+                            last_hw_warn = time.monotonic()
+                    blink_all(leds, (1.0, 0.0, 0.0), time.monotonic())
                 time.sleep(0.02)
                 continue
             if cam_fail:
                 print(f"[follow] camera recovered after {cam_fail} empty reads")
                 cam_fail = 0
+                if leds is not None:
+                    try:
+                        leds.all_off()
+                    except Exception:
+                        pass
 
             if frame_queue is not None:
                 try:
