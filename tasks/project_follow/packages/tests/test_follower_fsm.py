@@ -67,7 +67,8 @@ def test_follow_steers_toward_leader():
 
 
 def test_lost_far_centered_reacquires():
-    fsm = FollowerFSM(_cfg())
+    # "turn" mode: lost dead-ahead within grace creeps toward the last bearing.
+    fsm = FollowerFSM(_cfg(corner_mode="turn"))
     fsm.step(_wm(0.0, leader=_leader(span=20, lateral=0.1)))   # arm, far, near-centered
     d = fsm.step(_wm(0.5, leader=None, lane_healthy=False))    # within grace, no turn cue
     assert d.state_name == STATE_REACQUIRE
@@ -79,7 +80,7 @@ def test_lost_swept_sideways_mimics_the_leaders_turn():
     # Marker swept right out of frame => leader turned right: approach the
     # vanish point in-lane (no preemptive steering), then arc right, then
     # resume pursuit/follow.
-    fsm = FollowerFSM(_cfg(span_to_dist_k=17.5, turn_lateral_min=0.18,
+    fsm = FollowerFSM(_cfg(corner_mode="turn", span_to_dist_k=17.5, turn_lateral_min=0.18,
                            turn_approach_margin_m=0.05,
                            pursuit_turn_speed=0.15, pursuit_turn_steer=0.28,
                            turn_yaw_target_rad=1.35, post_turn_settle_s=3.0))
@@ -110,6 +111,42 @@ def test_lost_swept_sideways_mimics_the_leaders_turn():
     # Marker reappears at any point -> straight back to FOLLOW.
     d = fsm.step(_wm(5.0, leader=_leader(span=40)))
     assert d.state_name == STATE_FOLLOW
+
+
+def test_lane_mode_remembers_turn_and_biases_lane():
+    # Default "lane" mode: leader sweeps right then vanishes -> keep lane
+    # following, biased toward the remembered (right) corner, at pursuit pace.
+    fsm = FollowerFSM(_cfg(corner_mode="lane", turn_lateral_min=0.18,
+                           pursuit_speed=0.15, corner_commit_s=3.0,
+                           corner_steer_bias=0.12, max_steer=0.4))
+    fsm.step(_wm(0.0, leader=_leader(span=35, lateral=0.5)))   # arm, leader sweeping right
+    d = fsm.step(_wm(0.2, leader=None, lane_healthy=True, steer=0.05))
+    assert d.state_name == STATE_LANE
+    assert abs(d.base_speed - 0.15) < 1e-9                     # pursuit pace, not cruise
+    assert d.steering < 0.05                                   # biased RIGHT (-) of the lane
+    assert abs(d.steering - (0.05 - 0.12)) < 1e-9
+    assert fsm._corner_dir == 'right'
+    # Lane washes out within the pursuit window -> creep, still biased right.
+    creep = fsm.step(_wm(0.4, leader=None, lane_healthy=False, steer=0.0))
+    assert creep.state_name == STATE_REACQUIRE
+    assert abs(creep.base_speed - 0.12) < 1e-9
+    assert abs(creep.steering - (-0.12)) < 1e-9
+    # Leader reappears -> straight back to FOLLOW and corner memory cleared.
+    back = fsm.step(_wm(0.6, leader=_leader(span=40)))
+    assert back.state_name == STATE_FOLLOW
+    assert fsm._corner_dir is None
+
+
+def test_lane_mode_bias_decays_after_commit_window():
+    # After corner_commit_s the bias is gone: pure lane steering on a healthy lane.
+    fsm = FollowerFSM(_cfg(corner_mode="lane", turn_lateral_min=0.18,
+                           pursuit_timeout_s=30.0, corner_commit_s=1.0,
+                           corner_steer_bias=0.12))
+    fsm.step(_wm(0.0, leader=_leader(span=35, lateral=0.5)))   # arm, sweeping right
+    fsm.step(_wm(0.1, leader=None, lane_healthy=True, steer=0.0))   # arm corner memory
+    d = fsm.step(_wm(2.0, leader=None, lane_healthy=True, steer=0.07))  # past commit window
+    assert d.state_name == STATE_LANE
+    assert abs(d.steering - 0.07) < 1e-9                       # no bias left
 
 
 def test_lost_close_stops_not_coasts():

@@ -18,6 +18,15 @@ grid_min_score: 0.5
 leader_p_gain: 0.6
 max_steer:     0.4
 
+# --- corner recovery when the leader is lost in a turn ---
+corner_mode: lane             # "lane": remember which way the leader turned and keep
+                              #   lane-following (biased toward it) until re-seen — robust
+                              #   on the real bot (no pose odometry). "turn": legacy
+                              #   open-loop ~90deg dead-reckoned arc (sim only).
+corner_commit_s:   3.0        # bias the lane steering toward the remembered corner this long
+corner_steer_bias: 0.12       # how hard to nudge toward the corner (added to lane steering,
+                              #   clamped to +/- max_steer and to the base speed)
+
 # --- lost handling ---
 leader_lost_grace_s:    0.4   # window after the grid drops before handing off to lane pursuit
 pursuit_timeout_s:      25.0  # pursue this long after the last sighting before HOLD

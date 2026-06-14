@@ -10,12 +10,17 @@ States:
   CLOSE_STOP - marker lost while close: STOP (don't coast into the lead).
   REACQUIRE  - marker lost within grace: slow creep + steer toward the last-seen
                bearing, to turn *into* the corner the lead took.
-  PURSUIT_TURN - the marker swept sideways out of view: the lead turned a
-               corner. Don't cut toward where it WAS (that overtakes it
-               blindly inside the corner) — drive straight to where it
+  PURSUIT_TURN - ("turn" corner_mode only) the marker swept sideways out of
+               view: the lead turned a corner. Drive straight to where it
                vanished, execute our own ~90 deg turn in the observed
-               direction, then resume following.
-  LANE_FOLLOW- marker lost past grace, lane healthy: cruise on the lane.
+               direction (closed on pose odometry), then resume following.
+               Needs odometry, so it is the sim default; the real bot uses
+               the "lane" corner_mode below instead.
+  LANE_FOLLOW- marker lost: cruise on the lane (it IS the leader's path). In the
+               default "lane" corner_mode the steering is biased toward the
+               remembered turn direction for a short commit window, so the bot
+               commits to the corner the leader took instead of dead-reckoning a
+               blind arc, until the leader is re-seen.
   HOLD       - nothing visible for longer than the pursuit window: stop.
                (While the window is open, an unhealthy lane creeps on as
                REACQUIRE instead of parking — corners flicker lane health.)
@@ -92,6 +97,20 @@ class FollowerFSM:
         # as WAIT_LEAD's arming gap).
         self.post_turn_settle_s = float(cfg.get("post_turn_settle_s", 3.0))
 
+        # --- corner recovery mode ---
+        # "lane": on losing the leader in a curve, remember which way it turned
+        # and keep LANE-following (biased toward that side) until it is re-seen,
+        # instead of dead-reckoning a blind arc. Robust on the real bot, which
+        # has no pose odometry to close an open-loop turn. "turn": the legacy
+        # ~90deg maneuver above (sim, where the Godot pose feeds the loop).
+        self.corner_mode = str(cfg.get("corner_mode", "lane")).lower()
+        # While lost, bias the lane steering toward the remembered corner for
+        # this long (by then the lane markings themselves carry the curve).
+        self.corner_commit_s = float(cfg.get("corner_commit_s", 3.0))
+        # How hard to nudge toward the corner; added to the lane steering and
+        # clamped to +/- max_steer (and to the base speed by the motor mixer).
+        self.corner_steer_bias = float(cfg.get("corner_steer_bias", 0.12))
+
         self.rear_led_indices = list(cfg.get("rear_led_indices", [3, 4]))
 
         self._last_leader_t = -1e9
@@ -105,6 +124,10 @@ class FollowerFSM:
         #  'approach_m': float}
         self._pturn: Optional[dict] = None
         self._settle_until = -1.0
+        # Remembered turn direction while the leader is lost ('left'|'right'|None)
+        # and the time until which the lane steering stays biased toward it.
+        self._corner_dir: Optional[str] = None
+        self._corner_until = -1.0
 
     def step(self, wm: WorldModel, turn_yaw_rad: Optional[float] = None,
              fwd_dist_m: Optional[float] = None) -> Decision:
@@ -114,6 +137,7 @@ class FollowerFSM:
 
         if confident:
             self._pturn = None  # leader back in sight -> just follow it
+            self._corner_dir = None
             self._last_leader_t = t
             self._last_lateral = leader.lateral
             self._last_span = leader.pair_px if leader.pair_px is not None else leader.distance_px
@@ -133,14 +157,65 @@ class FollowerFSM:
             steer = lateral_to_steer(leader.lateral, self.leader_p_gain, self.max_steer)
             return self._mk(STATE_FOLLOW, speed, steer, self._rear_signal())
 
-        # Marker lost. An active pursuit turn runs to completion (unless the
-        # marker reappears, handled above).
+        # ---------- Marker lost ----------
+        # Remember which way the leader went the instant it vanished, so the
+        # recovery commits to that corner instead of re-guessing every frame
+        # (the cue is freshest on the first lost frame and ages out after).
+        if self._corner_dir is None:
+            turn_dir = self._infer_turn_dir(t)
+            if turn_dir is not None:
+                self._corner_dir = turn_dir
+                self._corner_until = t + self.corner_commit_s
+
+        if self.corner_mode == "turn":
+            return self._lost_turn_mode(wm, t, turn_yaw_rad, fwd_dist_m)
+        return self._lost_lane_mode(wm, t)
+
+    def _lost_lane_mode(self, wm: WorldModel, t: float) -> Decision:
+        """Default recovery: the leader is the lane, so keep following the lane,
+        biased toward the remembered turn direction until the leader is re-seen.
+        No open-loop arc -- a wrong direction guess only nudges the lane steering
+        instead of spinning the bot off the road."""
+        within_grace = (t - self._last_leader_t) < self.leader_lost_grace_s
+        # Lost while close (grid drops out at close range) -> STOP, don't coast.
+        if within_grace and self._last_span is not None and self._last_span >= self.grid_close_px:
+            return self._mk(STATE_CLOSE_STOP, 0.0, 0.0, all_leds(RED))
+
+        # While recently lost the leader is just around the corner: match its
+        # pace, not cruise, or the follower overruns it mid-turn. Past the
+        # window it is far -> cruise.
+        in_pursuit = (t - self._last_leader_t) < self.pursuit_timeout_s
+        # +steer turns LEFT, -steer RIGHT (see motors_from_decision). Bias decays
+        # out after the commit window, by which point the lane carries the curve.
+        bias = 0.0
+        if self._corner_dir is not None and t < self._corner_until:
+            bias = self.corner_steer_bias if self._corner_dir == "left" else -self.corner_steer_bias
+
+        if wm.lane.healthy:
+            steer = clamp(wm.lane.steering_suggestion + bias, -self.max_steer, self.max_steer)
+            speed = self.pursuit_speed if in_pursuit else self.cruise_speed
+            return self._mk(STATE_LANE, speed, steer, all_leds(YELLOW if bias else BLUE))
+
+        # Lane washed out (tight corner / bad frame): inside the pursuit window
+        # creep along the remembered curve instead of parking; the bias keeps it
+        # arcing the right way even with no lane to read.
+        if in_pursuit:
+            steer = clamp(wm.lane.steering_suggestion + bias, -self.max_steer, self.max_steer)
+            return self._mk(STATE_REACQUIRE, self.reacquire_creep, steer, all_leds(YELLOW))
+        return self._mk(STATE_HOLD, 0.0, 0.0, all_leds(OFF))
+
+    def _lost_turn_mode(self, wm: WorldModel, t: float,
+                        turn_yaw_rad: Optional[float],
+                        fwd_dist_m: Optional[float]) -> Decision:
+        """Legacy open-loop corner mimic (sim, closed on pose odometry): drive to
+        where the marker vanished, arc ~90 deg the way it went, then resume."""
+        # An active pursuit turn runs to completion (reappearance handled above).
         if self._pturn is not None:
             return self._run_pursuit_turn(wm, t, turn_yaw_rad, fwd_dist_m)
 
-        # Just finished mimicking the corner: hold still while the leader
-        # pulls away into detection range (tailgating keeps the grid larger
-        # than the frame forever).
+        # Just finished mimicking the corner: hold still while the leader pulls
+        # away into detection range (tailgating keeps the grid larger than the
+        # frame forever).
         if t < self._settle_until:
             return self._mk(STATE_CLOSE_STOP, 0.0, 0.0, all_leds(RED))
 
@@ -151,11 +226,10 @@ class FollowerFSM:
                 return self._mk(STATE_CLOSE_STOP, 0.0, 0.0, all_leds(RED))
             # Did the leader turn a corner? Mimic it: drive to where it
             # vanished, then turn the same way.
-            turn_dir = self._infer_turn_dir(t)
-            if turn_dir is not None:
+            if self._corner_dir is not None:
                 gap_m = self.span_to_dist_k / max(self._last_span or 1.0, 1.0)
                 self._pturn = {
-                    'dir': turn_dir,
+                    'dir': self._corner_dir,
                     'phase': 'approach',
                     't0': t,
                     'approach_m': max(0.0, gap_m - self.turn_approach_margin_m),
