@@ -18,7 +18,8 @@ from duckiebot.wheel_driver import DaguWheelsDriver
 from duckiebot.wheel_driver.wheels_driver_abs import WheelPWMConfiguration
 from duckiebot.led_driver import LEDDriver
 from launcher.ports import find_available_port
-from servers.common import shutdown_cleanup, suppress_http_logs
+from servers.common import (handle_hsv_tuning, shutdown_cleanup,
+                            suppress_http_logs, update_yaml_values)
 
 import tasks.project_follow.packages.agent as agent
 
@@ -32,16 +33,195 @@ INDEX_HTML = """<!doctype html>
   img.stream { max-width:100%; height:auto; border:1px solid #333; background:#000; cursor:crosshair; }
   #hsv { text-align:center; font-family:monospace; font-size:18px; padding:6px; min-height:22px; }
   #log { max-width:640px; margin:0 auto; font-family:monospace; font-size:12px; color:#9bd; }
+  #controls { text-align:center; padding:10px; }
+  #controls button { font-size:14px; padding:8px 18px; margin:0 6px; border:none; border-radius:4px; cursor:pointer; color:#fff; }
+  #controls button:disabled { opacity:0.4; cursor:not-allowed; }
+  #btnStop  { background:#a33; }
+  #btnStart { background:#3a3; }
+  #agentMsg { text-align:center; font-family:monospace; font-size:13px; min-height:18px; color:#ccc; }
+  #speedPanel { max-width:560px; margin:8px auto 0; padding:10px 14px; background:#1a1a1a; border:1px solid #333; border-radius:6px; }
+  #speedPanel h3 { margin:0 0 4px; font-size:14px; }
+  #speedPanel .hint { color:#888; font-size:12px; margin-bottom:8px; }
+  .speed-row { display:flex; align-items:center; gap:10px; font-family:monospace; font-size:13px; }
+  .speed-row input[type=range] { flex:1; }
+  .speed-row .v { width:46px; text-align:right; color:#8f8; font-size:15px; }
+  #speedMsg { font-family:monospace; font-size:12px; min-height:16px; color:#8f8; margin-top:6px; }
+  #hsvPanel { max-width:560px; margin:8px auto 0; padding:10px 14px; background:#1a1a1a; border:1px solid #333; border-radius:6px; }
+  #hsvPanel h3 { margin:0 0 4px; font-size:14px; }
+  #hsvPanel .hint { color:#888; font-size:12px; margin-bottom:8px; }
+  .hsv-group { margin-bottom:8px; }
+  .hsv-group .gl { font-size:12px; color:#bbb; margin:4px 0; font-weight:bold; }
+  .hsv-row { display:flex; align-items:center; gap:8px; font-family:monospace; font-size:12px; }
+  .hsv-row label { width:62px; color:#aaa; }
+  .hsv-row input[type=range] { flex:1; }
+  .hsv-row .v { width:34px; text-align:right; color:#8f8; }
+  #hsvMsg { font-family:monospace; font-size:12px; min-height:16px; color:#8f8; margin-top:6px; }
 </style></head>
 <body>
   <header>Convoy — Follower Bot &nbsp;<span class="hint">click the line in the top-left camera panel to read its H/S/V</span></header>
   <main><img id="cam" class="stream" src="/video" alt="camera"></main>
+  <div id="controls">
+    <button id="btnStop">Stop Agent</button>
+    <button id="btnStart">Start Agent</button>
+  </div>
+  <div id="agentMsg"></div>
+  <div id="speedPanel">
+    <h3>Cruise speed <span style="color:#8f8;font-size:11px;">(live)</span></h3>
+    <div class="hint">Sets the follower's cruise speed. Applies to the running FSM instantly and saves to the config. State machine still tapers toward 0 as it nears the leader and uses its own pursuit/turn speeds.</div>
+    <div class="speed-row">
+      <input type="range" id="speedRange" min="0.05" max="0.6" step="0.01" value="0.3">
+      <span class="v" id="speedVal">0.30</span>
+    </div>
+    <div id="speedMsg"></div>
+  </div>
+  <div id="hsvPanel">
+    <h3>Lane HSV tuning <span style="color:#8f8;font-size:11px;">(live)</span></h3>
+    <div class="hint">Sliders apply to the running yellow/white lane detector instantly &mdash; watch the mask panels &mdash; and save to the config. Click the camera panel to sample a pixel's H/S/V, then bracket the bounds around it.</div>
+    <div id="hsvSliders"></div>
+    <div id="hsvMsg"></div>
+  </div>
   <div id="hsv"></div>
   <div id="log"></div>
 <script>
   const img = document.getElementById('cam');
   const out = document.getElementById('hsv');
   const log = document.getElementById('log');
+  const btnStop = document.getElementById('btnStop');
+  const btnStart = document.getElementById('btnStart');
+  const agentMsg = document.getElementById('agentMsg');
+
+  async function postAgent(action) {
+    btnStop.disabled = true; btnStart.disabled = true;
+    try {
+      const resp = await fetch('/agent/' + action, { method: 'POST' });
+      const d = await resp.json();
+      agentMsg.style.color = (d.status === 'error') ? '#f88' : '#8f8';
+      agentMsg.textContent = d.message || '';
+    } catch (err) {
+      agentMsg.style.color = '#f88';
+      agentMsg.textContent = 'request failed';
+    }
+    pollStatus();
+  }
+  btnStop.addEventListener('click', () => postAgent('stop'));
+  btnStart.addEventListener('click', () => postAgent('start'));
+
+  async function pollStatus() {
+    try {
+      const resp = await fetch('/status');
+      const d = await resp.json();
+      const running = !!d.agent_running;
+      btnStop.disabled = !running;
+      btnStart.disabled = running;
+    } catch (err) { /* keep last known button state */ }
+  }
+  pollStatus();
+  setInterval(pollStatus, 2000);
+
+  // --- live cruise speed ---
+  const speedRange = document.getElementById('speedRange');
+  const speedVal = document.getElementById('speedVal');
+  const speedMsg = document.getElementById('speedMsg');
+  let speedTimer = null;
+  speedRange.addEventListener('input', () => {
+    speedVal.textContent = (+speedRange.value).toFixed(2);
+    clearTimeout(speedTimer);
+    speedTimer = setTimeout(applySpeed, 250);
+  });
+  async function loadSpeed() {
+    try {
+      const d = await (await fetch('/speed')).json();
+      if (d.bounds) { speedRange.min = d.bounds[0]; speedRange.max = d.bounds[1]; }
+      if (d.speed !== null && d.speed !== undefined) {
+        speedRange.value = d.speed;
+        speedVal.textContent = (+d.speed).toFixed(2);
+      }
+    } catch (err) { /* /speed may be unavailable */ }
+  }
+  async function applySpeed() {
+    try {
+      const resp = await fetch('/speed', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ speed: +speedRange.value }),
+      });
+      const d = await resp.json();
+      speedMsg.style.color = (d.status === 'error') ? '#f88' : '#8f8';
+      speedMsg.textContent = d.message || '';
+      if (d.speed !== null && d.speed !== undefined) {
+        speedRange.value = d.speed;
+        speedVal.textContent = (+d.speed).toFixed(2);
+      }
+    } catch (err) { speedMsg.style.color = '#f88'; speedMsg.textContent = 'apply failed'; }
+  }
+  loadSpeed();
+
+  // --- live lane HSV tuning ---
+  const HSV_KNOBS = [
+    ['yellow', 'Yellow', [
+      ['yellow_lower_h', 'H min', 179], ['yellow_upper_h', 'H max', 179],
+      ['yellow_lower_s', 'S min', 255], ['yellow_upper_s', 'S max', 255],
+      ['yellow_lower_v', 'V min', 255], ['yellow_upper_v', 'V max', 255],
+    ]],
+    ['white', 'White', [
+      ['white_lower_h', 'H min', 179], ['white_upper_h', 'H max', 179],
+      ['white_lower_s', 'S min', 255], ['white_upper_s', 'S max', 255],
+      ['white_lower_v', 'V min', 255], ['white_upper_v', 'V max', 255],
+    ]],
+  ];
+  const hsvMsg = document.getElementById('hsvMsg');
+  const hsvKeys = [];
+  let hsvTimer = null;
+  (function buildHsv() {
+    const root = document.getElementById('hsvSliders');
+    for (const [, group, knobs] of HSV_KNOBS) {
+      const g = document.createElement('div');
+      g.className = 'hsv-group';
+      g.innerHTML = '<div class="gl">' + group + '</div>';
+      for (const [key, label, hi] of knobs) {
+        hsvKeys.push(key);
+        const row = document.createElement('div');
+        row.className = 'hsv-row';
+        row.innerHTML = '<label>' + label + '</label>' +
+          '<input type="range" min="0" max="' + hi + '" step="1" id="r-' + key + '">' +
+          '<span class="v" id="v-' + key + '">0</span>';
+        g.appendChild(row);
+      }
+      root.appendChild(g);
+    }
+    for (const key of hsvKeys) {
+      const el = document.getElementById('r-' + key);
+      el.addEventListener('input', () => {
+        document.getElementById('v-' + key).textContent = el.value;
+        clearTimeout(hsvTimer);
+        hsvTimer = setTimeout(applyHsv, 300);
+      });
+    }
+  })();
+  async function loadHsv() {
+    try {
+      const d = await (await fetch('/hsv')).json();
+      for (const key of hsvKeys) {
+        if (d[key] === undefined) continue;
+        document.getElementById('r-' + key).value = d[key];
+        document.getElementById('v-' + key).textContent = d[key];
+      }
+    } catch (err) { /* /hsv may be unavailable */ }
+  }
+  async function applyHsv() {
+    const body = {};
+    for (const key of hsvKeys) body[key] = +document.getElementById('r-' + key).value;
+    try {
+      const resp = await fetch('/hsv', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const d = await resp.json();
+      hsvMsg.style.color = (d.status === 'error') ? '#f88' : '#8f8';
+      hsvMsg.textContent = d.message || '';
+    } catch (err) { hsvMsg.style.color = '#f88'; hsvMsg.textContent = 'apply failed'; }
+  }
+  loadHsv();
+
   img.addEventListener('click', async (e) => {
     const r = img.getBoundingClientRect();
     const fx = (e.clientX - r.left) / r.width;
@@ -67,6 +247,9 @@ camera     = None
 wheels     = None
 leds       = None
 stop_event = threading.Event()
+
+_agent_thread = None
+_agent_lock   = threading.Lock()
 
 _frame_queue = queue.Queue(maxsize=2)
 _debug_info_lock = threading.Lock()
@@ -215,6 +398,45 @@ def generate_frames():
             time.sleep(0.05)
 
 
+# --- agent lifecycle ---------------------------------------------------------
+
+def _agent_alive():
+    return _agent_thread is not None and _agent_thread.is_alive()
+
+
+def _start_agent():
+    """Start the follower agent thread on the real hardware (camera, wheels and
+    LEDs)."""
+    global _agent_thread
+    with _agent_lock:
+        if _agent_alive():
+            return False
+        stop_event.clear()
+        _agent_thread = threading.Thread(
+            target=agent.main,
+            args=(camera, wheels, leds, stop_event, _frame_queue, _debug_info_lock, _debug_info),
+            daemon=True,
+            name='FollowAgentThread',
+        )
+        _agent_thread.start()
+        return True
+
+
+def _stop_agent(timeout=3.0):
+    """Signal the agent to stop and join it. Returns (was_running, stopped_now).
+    The agent's finally block zeroes the wheels and turns the LEDs off, so the
+    bot halts cleanly. stopped_now is False if the thread is wedged past the
+    join timeout."""
+    with _agent_lock:
+        if not _agent_alive():
+            return False, True
+        stop_event.set()
+        _agent_thread.join(timeout)
+        return True, not _agent_thread.is_alive()
+
+
+# --- routes ------------------------------------------------------------------
+
 @app.route('/')
 def index():
     return INDEX_HTML
@@ -228,7 +450,25 @@ def video():
 @app.route('/status')
 def status():
     with _debug_info_lock:
-        return jsonify(dict(_debug_info))
+        info = dict(_debug_info)
+    info['agent_running'] = _agent_alive()
+    return jsonify(info)
+
+
+@app.route('/agent/start', methods=['POST'])
+def agent_start():
+    started = _start_agent()
+    return jsonify(status='ok', message='agent started' if started else 'agent already running')
+
+
+@app.route('/agent/stop', methods=['POST'])
+def agent_stop():
+    was_running, stopped = _stop_agent()
+    if not was_running:
+        return jsonify(status='ok', message='agent not running')
+    if not stopped:
+        return jsonify(status='error', message='agent is still stopping — wheels are zeroed')
+    return jsonify(status='ok', message='agent stopped')
 
 
 @app.route('/sample')
@@ -269,6 +509,53 @@ def sample():
         v=int(np.median(hsv[:, :, 2])),
         px=px, py=py,
     )
+
+
+_HSV_CONFIG_FILE = os.path.normpath(os.path.join(
+    os.path.dirname(__file__), '..', '..', 'config', 'lane_servoing_hsv_config.yaml'))
+_FOLLOW_CONFIG_FILE = os.path.normpath(os.path.join(
+    os.path.dirname(__file__), '..', '..', 'config', 'project_follow_config.yaml'))
+
+# Cruise-speed slider bounds (matches the sim server's /tuning).
+_SPEED_BOUNDS = (0.05, 0.6)
+
+
+@app.route('/hsv', methods=['GET', 'POST'])
+def hsv_tuning():
+    """Read or live-update the yellow/white lane HSV bounds. POSTed values apply
+    to the running detector immediately (the mask panels in the montage redraw
+    with them on the next frame) and persist to the YAML config so restarts keep
+    them. Use the click-to-sample tool to read pixel H/S/V, then set the bounds
+    around it."""
+    return jsonify(handle_hsv_tuning(request, _HSV_CONFIG_FILE))
+
+
+@app.route('/speed', methods=['GET', 'POST'])
+def speed():
+    """Read or live-set the follower's cruise speed. POSTed values apply to the
+    running FSM immediately (clamped to _SPEED_BOUNDS) and persist to the YAML
+    config so restarts keep them. The FSM still tapers toward 0 as the leader
+    nears and uses its own pursuit/turn speeds, so this is the headline cruise
+    pace, not a fixed wheel command."""
+    fsm = getattr(agent, 'live', {}).get('fsm')
+
+    if request.method == 'GET':
+        return jsonify(speed=getattr(fsm, 'cruise_speed', None), bounds=list(_SPEED_BOUNDS))
+
+    body = request.get_json(silent=True) or {}
+    if body.get('speed') is None:
+        return jsonify(status='error', message='no speed provided')
+    try:
+        lo, hi = _SPEED_BOUNDS
+        val = min(hi, max(lo, float(body['speed'])))
+    except (TypeError, ValueError):
+        return jsonify(status='error', message='bad speed value')
+
+    if fsm is not None:
+        fsm.cruise_speed = val
+    update_yaml_values(_FOLLOW_CONFIG_FILE, {'cruise_speed': val})
+    note = '' if fsm is not None else ' (agent not running: saved to config only)'
+    return jsonify(status='ok', message=f'cruise speed = {val:g}{note}', speed=val)
 
 
 @app.route('/command', methods=['POST'])
@@ -313,13 +600,7 @@ def main():
     print('  Camera: ok')
 
     print('\n[4/4] Starting follower agent...')
-    stop_event.clear()
-    threading.Thread(
-        target=agent.main,
-        args=(camera, wheels, leds, stop_event, _frame_queue, _debug_info_lock, _debug_info),
-        daemon=True,
-        name='FollowAgentThread',
-    ).start()
+    _start_agent()
     print('  agent.main() running')
 
     def _shutdown(signum, frame):
