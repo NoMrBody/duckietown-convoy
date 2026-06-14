@@ -8,10 +8,10 @@
 cruise_speed: 0.30
 
 # --- follow distance taper (FIELD-TUNE: grid mean dot spacing in px) ---
-grid_safe_px:  18      # span <= this  => far  => full cruise speed
-grid_stop_px:  70      # span >= this  => close => zero speed (implicit stop)
-grid_close_px: 55      # lost while span >= this => CLOSE_STOP (don't coast into the lead)
-grid_arm_px:   60      # only start following once a gap this large (span <= this) has opened
+grid_safe_px:  20      # span <= this  => far  => full cruise speed
+grid_stop_px:  42      # span >= this  => close => zero speed (implicit stop)
+grid_close_px: 36      # lost while span >= this => CLOSE_STOP (don't coast into the lead)
+grid_arm_px:   40      # only start following once a gap this large (span <= this) has opened
 grid_min_score: 0.5
 
 # --- pursuit steering ---
