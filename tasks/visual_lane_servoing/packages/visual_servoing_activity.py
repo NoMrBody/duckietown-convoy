@@ -21,21 +21,6 @@ _SIGMA = 4.5
 _MAG_THRESHOLD = 40.0
 
 
-def _keep_blobs_touching_edges(color_mask, edge_mask):
-    """Keep entire connected components of ``color_mask`` (0/255) that overlap a
-    strong edge, dropping flat blobs with no edge anywhere. Unlike pixel-wise
-    edge gating this preserves the filled interior of a marking instead of
-    leaving only its outline."""
-    num, labels = cv2.connectedComponents(color_mask)
-    if num <= 1:
-        return color_mask
-    hit = np.unique(labels[edge_mask & (labels > 0)])
-    hit = hit[hit > 0]
-    if hit.size == 0:
-        return np.zeros_like(color_mask)
-    return np.where(np.isin(labels, hit), 255, 0).astype(np.uint8)
-
-
 def detect_lane_markings(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
     # Crop the top (horizon) — only look at the road
     h, w = image.shape[:2]
@@ -60,21 +45,18 @@ def detect_lane_markings(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
 
     # Edge gating. Pure color can't tell a line from bright road/glare, which
     # share its low-saturation/high-value signature; a real line has a strong
-    # intensity gradient, flat road doesn't.
+    # intensity gradient, flat road doesn't. Keep only color pixels that sit on
+    # a strong edge, and split by horizontal-gradient SIGN so the yellow (left)
+    # and white (right) detectors latch onto their own edge instead of the
+    # opposite marking. Sign uses x only — gating on the vertical sign too would
+    # prune the near-horizontal line segments seen in curves.
     gray   = cv2.cvtColor(blurred, cv2.COLOR_BGR2GRAY)
     sobelx = cv2.Sobel(gray, cv2.CV_64F, 1, 0, ksize=3)
     sobely = cv2.Sobel(gray, cv2.CV_64F, 0, 1, ksize=3)
     strong = np.sqrt(sobelx * sobelx + sobely * sobely) > _MAG_THRESHOLD
 
-    # White aliases with bright road/glare, so keep only color pixels that sit on
-    # a strong edge with the correct horizontal-gradient sign (right-side edge).
-    white_mask = np.where(strong & (sobelx > 0), white_mask, 0).astype(np.uint8)
-
-    # Yellow's hue is distinctive, so don't thin it down to its edge (that left
-    # only the border outline, hollowing out thick markings). Keep the WHOLE
-    # color blob as long as it touches a strong edge — this fills the interior
-    # while still rejecting flat yellow-ish glare that has no edge anywhere.
-    yellow_mask = _keep_blobs_touching_edges(yellow_mask, strong)
+    yellow_mask = np.where(strong & (sobelx < 0), yellow_mask, 0).astype(np.uint8)
+    white_mask  = np.where(strong & (sobelx > 0), white_mask,  0).astype(np.uint8)
 
     # Put masks back into full-size images
     full_yellow = np.zeros((h, w), dtype=np.uint8)
