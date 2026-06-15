@@ -27,7 +27,6 @@ States:
 
 Pure logic over a WorldModel -> unit-testable without vision/hardware.
 """
-import math
 from collections import deque
 from typing import Optional
 
@@ -152,6 +151,17 @@ class FollowerFSM:
         self.pose_stop_m   = float(cfg.get("pose_stop_m", 0.45))
         self.pose_safe_m   = float(cfg.get("pose_safe_m", 1.00))
         self.pose_speed    = float(cfg.get("pose_pursuit_speed", self.cruise_speed))
+        # Committed corner turn: when the leader swings clearly to one side it
+        # has turned a corner. Rather than tentatively chasing its exact bearing
+        # (which stalls at corners — low closing speed + the close-range stop),
+        # LATCH that side and drive a decisive constant arc that way until we
+        # have rotated back to roughly facing it (or the marker re-acquires and
+        # FOLLOW takes over). Hysteresis (enter > exit) stops it chattering as
+        # the bearing crosses zero.
+        self.pose_turn_enter_rad = float(cfg.get("pose_turn_enter_rad", 0.45))  # commit a turn past this |bearing|
+        self.pose_turn_exit_rad  = float(cfg.get("pose_turn_exit_rad", 0.20))   # release once within this of facing the leader
+        self.pose_turn_steer = float(cfg.get("pose_turn_steer", 0.22))          # arc steer during the committed turn
+        self.pose_turn_speed = float(cfg.get("pose_turn_speed", 0.26))          # forward pace during the committed turn
 
         self.rear_led_indices = list(cfg.get("rear_led_indices", [3, 4]))
 
@@ -176,6 +186,10 @@ class FollowerFSM:
         # because its dots fill / leave the frame): hold a STOP so we never creep
         # into the leader's back. Cleared only when the leader is seen again.
         self._close_stop = False
+        # Latched committed corner turn for the sim pose bridge ('left'|'right'|
+        # None): once the leader swings clearly to one side we drive a decisive
+        # arc that way until roughly facing it again or the marker re-acquires.
+        self._pose_turn_dir: Optional[str] = None
 
     def step(self, wm: WorldModel, turn_yaw_rad: Optional[float] = None,
              fwd_dist_m: Optional[float] = None,
@@ -193,6 +207,7 @@ class FollowerFSM:
             if abs(leader.lateral) < 0.10 and not wm.lane.is_curve:
                 self._corner_dir = None
             self._close_stop = False  # leader resolvable again -> release the stop
+            self._pose_turn_dir = None  # marker regained -> end any committed corner turn, just follow
             self._last_leader_t = t
             self._last_lateral = leader.lateral
             self._last_span = leader.pair_px if leader.pair_px is not None else leader.distance_px
@@ -254,18 +269,43 @@ class FollowerFSM:
 
     def _pose_pursuit(self, bearing: float, gap_m: Optional[float]) -> Decision:
         """SIM ONLY: marker lost but the leader's true Godot pose is known.
-        Steer straight at it. Convention (see agent.py): +bearing = leader to
-        the LEFT, and +steer turns LEFT, so steer has the SAME sign as the
-        bearing error. Speed tapers with the true metric gap so we hold a
-        marker-detectable distance and never ram. Mutates no latched state."""
+        Convention (see agent.py): +bearing = leader to the LEFT, and +steer
+        turns LEFT, so steer takes the SAME sign as the bearing.
+
+        Two modes. When the leader is clearly to one side it has rounded a
+        corner -> LATCH that side and drive a DECISIVE constant arc that way
+        until we have rotated back to roughly facing it (hysteresis: enter past
+        pose_turn_enter_rad, release within pose_turn_exit_rad). This commits to
+        the corner instead of tentatively chasing the exact bearing (which
+        stalls — low closing speed + the close-range stop). When the leader is
+        roughly ahead, fall back to a gentle gap-tapered approach so we hold a
+        marker-detectable distance, never ram, and hand straight back to FOLLOW.
+        Mutates only self._pose_turn_dir (the committed-turn latch)."""
         # Leader (nearly) behind us — we overshot: hold rather than pivot or
         # reverse, and let FOLLOW / the marker re-acquire from a clean bearing.
         if abs(bearing) >= self.pose_behind_rad:
+            self._pose_turn_dir = None
             return self._mk(STATE_POSE, 0.0, 0.0, all_leds(GREEN))
 
+        # Committed-turn latch with hysteresis.
+        if self._pose_turn_dir is None:
+            if abs(bearing) >= self.pose_turn_enter_rad:
+                self._pose_turn_dir = "left" if bearing > 0 else "right"
+        elif abs(bearing) <= self.pose_turn_exit_rad:
+            self._pose_turn_dir = None
+
+        if self._pose_turn_dir is not None:
+            # Decisive arc toward where the leader went. Fixed speed so the turn
+            # never stalls; the leader is off to the side, so driving forward
+            # arcs around the corner rather than into the leader.
+            sign = 1.0 if self._pose_turn_dir == "left" else -1.0
+            steer = clamp(sign * self.pose_turn_steer, -self.max_steer, self.max_steer)
+            return self._mk(STATE_POSE, self.pose_turn_speed, steer, all_leds(YELLOW))
+
+        # Leader roughly ahead: gentle proportional approach, gap-tapered so we
+        # close to a marker-detectable distance and stop rather than ram.
         err = 0.0 if abs(bearing) < self.pose_deadband_rad else bearing
         steer = clamp(self.pose_p_gain * err, -self.max_steer, self.max_steer)
-
         if gap_m is None:
             speed = self.pose_speed
         elif gap_m <= self.pose_stop_m:
@@ -275,21 +315,6 @@ class FollowerFSM:
         else:
             frac = (gap_m - self.pose_stop_m) / (self.pose_safe_m - self.pose_stop_m)
             speed = self.pose_speed * frac
-
-        # motors_from_decision clamps |steer| <= base_speed, so a corner cannot
-        # be expressed without forward throttle. Raise the base enough to turn,
-        # but CAP the forward (closing) component at the gap taper so the floor
-        # never speeds us toward a near, nearly-aligned leader (which would
-        # defeat the taper's separation). Closing speed = base * cos(bearing): a
-        # sharp corner (|bearing|~90deg, cos~0) moves ACROSS not toward the
-        # leader, so it gets the full turn speed; a gentle off-axis (cos~1) stays
-        # at the tapered pace. Skipped when stopped for closeness (hold to let
-        # the leader separate back into marker range).
-        turn_need = min(abs(steer), self.pose_speed)
-        if speed > 0.0 and turn_need > speed:
-            cos_b = math.cos(err)
-            closing_cap = self.pose_speed if cos_b <= 0.05 else speed / cos_b
-            speed = min(turn_need, closing_cap)
         return self._mk(STATE_POSE, speed, steer, all_leds(GREEN))
 
     def _lost_lane_mode(self, wm: WorldModel, t: float) -> Decision:

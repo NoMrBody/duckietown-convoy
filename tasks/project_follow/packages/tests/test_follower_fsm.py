@@ -314,18 +314,39 @@ def test_lost_past_grace_falls_back_to_lane_then_hold():
     assert hold.state_name == STATE_HOLD and hold.base_speed == 0.0
 
 
-def test_pose_bridge_steers_toward_leader():
-    # SIM pose bridge: marker lost but the leader's true bearing is known.
-    # +bearing = leader to the LEFT, and +steer turns LEFT, so the steer takes
-    # the SAME sign as the bearing. It pre-empts the vision lane fallback.
+def test_pose_bridge_commits_turn_toward_leader_side():
+    # SIM pose bridge: marker lost, leader's true bearing known. Leader clearly
+    # to one side (past pose_turn_enter_rad) => commit a decisive arc that way.
+    # +bearing = leader LEFT, +steer turns LEFT. (Separate FSMs: the commit latches.)
+    left_fsm = FollowerFSM(_cfg())
+    left_fsm.step(_wm(0.0, leader=_leader(span=50)))            # arm
+    left = left_fsm.step(_wm(0.5, leader=None, lane_healthy=True),
+                         leader_bearing_rad=0.6, leader_gap_m=0.8)
+    assert left.state_name == STATE_POSE and left.steering > 0 and left.base_speed > 0
+    assert left_fsm._pose_turn_dir == "left"
+
+    right_fsm = FollowerFSM(_cfg())
+    right_fsm.step(_wm(0.0, leader=_leader(span=50)))
+    right = right_fsm.step(_wm(0.5, leader=None, lane_healthy=True),
+                          leader_bearing_rad=-0.6, leader_gap_m=0.8)
+    assert right.state_name == STATE_POSE and right.steering < 0
+    assert right_fsm._pose_turn_dir == "right"
+
+
+def test_pose_bridge_turn_latches_with_hysteresis_until_facing_leader():
+    # Once committed, the turn holds (even as the bearing shrinks through the
+    # enter/exit gap) until we are roughly facing the leader, so it does not
+    # chatter as the bearing crosses zero. Released => gentle approach.
     fsm = FollowerFSM(_cfg())
     fsm.step(_wm(0.0, leader=_leader(span=50)))                 # arm
-    left = fsm.step(_wm(0.5, leader=None, lane_healthy=True),
-                    leader_bearing_rad=0.5, leader_gap_m=0.8)
-    assert left.state_name == STATE_POSE and left.steering > 0 and left.base_speed > 0
-    right = fsm.step(_wm(0.6, leader=None, lane_healthy=True),
-                     leader_bearing_rad=-0.5, leader_gap_m=0.8)
-    assert right.state_name == STATE_POSE and right.steering < 0
+    a = fsm.step(_wm(0.5, leader=None), leader_bearing_rad=0.6, leader_gap_m=0.8)
+    assert fsm._pose_turn_dir == "left" and a.steering > 0
+    # bearing now between exit (0.20) and enter (0.45): still committed
+    b = fsm.step(_wm(0.6, leader=None), leader_bearing_rad=0.30, leader_gap_m=0.8)
+    assert fsm._pose_turn_dir == "left" and b.steering > 0
+    # within exit: release the commit -> gentle proportional approach
+    c = fsm.step(_wm(0.7, leader=None), leader_bearing_rad=0.10, leader_gap_m=0.8)
+    assert fsm._pose_turn_dir is None and c.state_name == STATE_POSE
 
 
 def test_pose_bridge_stops_when_close_and_holds_when_behind():
@@ -355,22 +376,17 @@ def test_pose_bridge_absent_preserves_vision_path():
     assert d.state_name == STATE_LANE and abs(d.base_speed - 0.15) < 1e-9
 
 
-def test_pose_bridge_turn_floor_caps_closing_speed():
-    # The turn-floor must give enough base to ROTATE at a sharp corner without
-    # speeding the follower TOWARD a near, nearly-aligned leader (which would
-    # defeat the gap taper's separation). Closing speed = base*cos(bearing).
+def test_pose_bridge_ahead_approach_tapers_but_corner_turns_decisively():
+    # Leader ~ahead and close (below pose_turn_enter_rad): gentle gap-tapered
+    # approach -> low speed, does not ram. A clear corner: decisive turn speed.
     fsm = FollowerFSM(_cfg())
     fsm.step(_wm(0.0, leader=_leader(span=50)))                 # arm
-    # Gentle off-axis, close (in the taper band): base must stay ~tapered, NOT
-    # jump to the pursuit speed.
-    gentle = fsm.step(_wm(0.5, leader=None), leader_bearing_rad=0.3, leader_gap_m=0.5)
-    assert gentle.state_name == STATE_POSE
-    assert gentle.base_speed < 0.05                            # held near the taper, not sped up
-    # Sharp ~80deg corner: motion is across (not toward) the leader, so it DOES
-    # get the turn speed to rotate.
+    ahead = fsm.step(_wm(0.5, leader=None), leader_bearing_rad=0.3, leader_gap_m=0.5)
+    assert ahead.state_name == STATE_POSE and fsm._pose_turn_dir is None
+    assert ahead.base_speed < 0.05                             # tapered approach, not sped up
     sharp = fsm.step(_wm(0.6, leader=None), leader_bearing_rad=1.4, leader_gap_m=0.6)
-    assert sharp.state_name == STATE_POSE
-    assert sharp.base_speed > 0.2 and abs(sharp.steering) > 0.2
+    assert sharp.state_name == STATE_POSE and fsm._pose_turn_dir == "left"
+    assert sharp.base_speed > 0.2 and abs(sharp.steering) > 0.2  # decisive committed turn
 
 
 def test_stop_signs_are_ignored():
