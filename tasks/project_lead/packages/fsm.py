@@ -13,6 +13,7 @@ The lead follows no one. It:
 Pure logic over a WorldModel + an optional encoder-derived yaw, so it is unit
 testable without the vision stack or hardware.
 """
+from collections import deque
 from typing import Optional
 
 from tasks.project.packages.fsm_common import (
@@ -110,6 +111,14 @@ class LeadFSM:
         # Brief hold so the CURVE state doesn't flap when the detector
         # flickers frame to frame.
         self.curve_hold_s = float(cfg.get("curve_hold_s", 0.4))
+        # ENTRY hysteresis: a single is_curve=True frame must NOT (re)arm the
+        # hold — a sporadic spurious sim bend at even ~8-15% would then pin
+        # CURVE forever. Require a majority of a short sliding window to be
+        # True before entering; a genuine sustained curve still enters in
+        # ~0.3s and keeps the curve_hold_s de-flap exit.
+        self.curve_enter_window_s    = float(cfg.get("curve_enter_window_s", 0.30))   # ~9 frames @30fps
+        self.curve_enter_frac        = float(cfg.get("curve_enter_frac", 0.6))         # >=60% of window True to ENTER
+        self.curve_enter_min_samples = int(cfg.get("curve_enter_min_samples", 4))      # window must be reasonably full
 
         # Halt when the lane has been unhealthy this long while cruising:
         # without it the bot keeps driving blind at cruise speed straight off
@@ -119,6 +128,7 @@ class LeadFSM:
         # mutable state
         self.route_idx = 0
         self._curve_until = -1.0
+        self._curve_hist = deque()   # (t, bool) is_curve samples within the enter window
         self._stop_until = -1.0
         self._slow_until = -1.0
         self._slow_cooldown_until = -1.0
@@ -222,7 +232,17 @@ class LeadFSM:
         #    and through it as a dedicated state. Held briefly so a
         #    flickering detection doesn't flap the state.
         steer = wm.lane.steering_suggestion
-        if wm.lane.is_curve:
+        # Entry gate: only (re)arm the curve hold once a MAJORITY of a short
+        # sliding window of frames saw is_curve. A single noisy True frame can
+        # no longer latch CURVE; a sustained genuine bend enters within
+        # ~curve_enter_window_s. The 0.4s curve_hold_s exit is unchanged so a
+        # real curve still de-flaps once entered.
+        self._curve_hist.append((t, bool(wm.lane.is_curve)))
+        while self._curve_hist and t - self._curve_hist[0][0] > self.curve_enter_window_s:
+            self._curve_hist.popleft()
+        n = len(self._curve_hist)
+        frac = (sum(1 for _, c in self._curve_hist if c) / n) if n else 0.0
+        if n >= self.curve_enter_min_samples and frac >= self.curve_enter_frac:
             self._curve_until = t + self.curve_hold_s
         if t < self._curve_until:
             factor = min(self.curve_speed_factor, self._steer_factor(steer))

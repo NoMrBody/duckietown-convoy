@@ -116,6 +116,27 @@ def visualize(frame_bgr):
                          f"R: {info.get('right_speed', 0.0):+.2f}", (10, 70), font, 0.5, (0, 255, 0), 1)
     cv2.putText(display, f"Route: {info.get('route_idx', 0)}", (10, 90), font, 0.5, (0, 255, 0), 1)
 
+    # Curve diagnostics: draw the per-slice line picks (yellow centerline +
+    # white edge) the curve detector ran on, and its verdict. The agent runs
+    # on the full 640x480 frame, so scale picks to whatever this display is.
+    yellow_xs = info.get('yellow_xs')
+    white_xs  = info.get('white_xs')
+    slice_ys  = info.get('slice_ys')
+    if slice_ys:
+        sx, sy = w / 640.0, h / 480.0
+        for xs, col in ((yellow_xs, (0, 255, 255)), (white_xs, (255, 255, 255))):
+            if not xs:
+                continue
+            for x, yy in zip(xs, slice_ys):
+                if x is None:
+                    continue
+                cv2.circle(display, (int(x * sx), int(yy * sy)), 4, col, -1)
+    is_curve = info.get('is_curve')
+    cdir = info.get('curve_dir', 0)
+    if is_curve is not None:
+        ccol = (0, 0, 255) if is_curve else (0, 255, 0)
+        cv2.putText(display, f"CURVE={is_curve} dir={cdir}", (10, 110), font, 0.5, ccol, 1)
+
     rl = info.get('red_line')
     if rl:
         cv2.putText(display, f"RedLine: w={rl[0]} d={rl[1]}", (10, h - 60), font, 0.5, (0, 0, 255), 1)
@@ -476,6 +497,23 @@ def reset():
         return jsonify(status='ok', message='simulation reset (manual)')
     _start_agent()
     return jsonify(status='ok', message='simulation reset')
+
+
+@app.route('/snapshot')
+def snapshot():
+    """Save the latest RAW (unannotated, full-res) camera frame to disk for
+    offline detector calibration. Drive to the spot you want to debug, then
+    GET /snapshot and read the returned path."""
+    frame = _frame_queue.get_latest()
+    frame = None if frame is None else frame.copy()
+    if frame is None:
+        return jsonify(error='no frame yet')
+    out_dir = '/tmp/simframes'
+    os.makedirs(out_dir, exist_ok=True)
+    idx = len([f for f in os.listdir(out_dir) if f.startswith('raw_')])
+    path = os.path.join(out_dir, f'raw_{idx:03d}.png')
+    cv2.imwrite(path, frame)
+    return jsonify(status='ok', path=path, shape=list(frame.shape))
 
 
 @app.route('/command', methods=['POST'])

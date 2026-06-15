@@ -10,11 +10,18 @@ white_lower_v: 120
 white_upper_h: 179
 white_upper_s: 55
 white_upper_v: 255
-# Yellow: widen hue for camera tint; low S/V floors for dim dashes on dark road.
-# Pale-dash band is OR-ed in the detector (see _PALE_YELLOW_*).
+# Yellow: low S/V floors for dim dashes on dark road. Pale-dash band is OR-ed
+# in the detector (see _PALE_YELLOW_*).
+# UPPER HUE 45 (was 65): the real yellow line measures H=30 (top of file); 65
+# was over-padded and reached into GREEN (H~48-65). In the clean Godot sim the
+# off-road grass reads H~48-53 and was caught as a fat "yellow" blob on the road
+# shoulder, dragging the centerline pick to mid-frame and steering the lead bot
+# off the road. 45 keeps a 15-unit margin above real yellow (H=30; a pink-cast
+# camera shifts yellow toward red / LOWER hue, never higher) while rejecting the
+# sim grass (min H~48). If a real camera ever reads yellow above 45, re-widen.
 yellow_lower_h: 8
 yellow_lower_s: 25
 yellow_lower_v: 45
-yellow_upper_h: 65
+yellow_upper_h: 45
 yellow_upper_s: 255
 yellow_upper_v: 255

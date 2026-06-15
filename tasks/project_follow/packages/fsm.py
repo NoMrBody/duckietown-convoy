@@ -27,11 +27,12 @@ States:
 
 Pure logic over a WorldModel -> unit-testable without vision/hardware.
 """
+import math
 from collections import deque
 from typing import Optional
 
 from tasks.project.packages.fsm_common import (
-    BLUE, OFF, RED, YELLOW, Decision, all_leds, clamp, follow_speed, lateral_to_steer,
+    BLUE, GREEN, OFF, RED, YELLOW, Decision, all_leds, clamp, follow_speed, lateral_to_steer,
 )
 from tasks.project.packages.world_model import WorldModel
 
@@ -42,6 +43,7 @@ STATE_REACQUIRE  = "REACQUIRE"
 STATE_TURN       = "PURSUIT_TURN"
 STATE_LANE       = "LANE_FOLLOW"
 STATE_HOLD       = "HOLD"
+STATE_POSE       = "POSE_PURSUIT"
 
 
 class FollowerFSM:
@@ -127,6 +129,30 @@ class FollowerFSM:
         # clamped to +/- max_steer (and to the base speed by the motor mixer).
         self.corner_steer_bias = float(cfg.get("corner_steer_bias", 0.12))
 
+        # --- sim-only pose-guided corner bridge ---
+        # The Godot sim hands the follower the LEADER's true world pose; the real
+        # robot does not (the bearing is None there, so this whole branch is
+        # auto-disabled and the vision lane fallback above runs instead). While
+        # the circle-grid marker is lost, steer straight at the leader's true
+        # position. Vision cannot infer a sharp perpendicular intersection turn
+        # (the marker stays centered until it vanishes and the follower's own
+        # lane runs straight on), so the lane fallback drives off the leader's
+        # path there; the pose bridge follows ANY corner and hands straight back
+        # to vision FOLLOW the instant the grid re-detects (FOLLOW out-ranks this
+        # branch). Pure point pursuit — there is no leader heading to feed
+        # forward, only its position.
+        self.pose_pursuit_enabled = bool(cfg.get("pose_pursuit", True))
+        self.pose_p_gain   = float(cfg.get("pose_p_gain", 1.0))    # steer per rad of bearing error
+        self.pose_deadband_rad = float(cfg.get("pose_deadband_rad", 0.05))  # ignore tiny bearing (anti-hunt)
+        self.pose_behind_rad   = float(cfg.get("pose_behind_rad", 2.6))     # |bearing| past this => leader behind: HOLD, don't pivot/reverse
+        # Distance taper off the TRUE metric gap, mirroring the FOLLOW span
+        # taper so the two agree at the handoff: stop closer than pose_stop_m
+        # (never ram; let the leader separate back into marker range), full pace
+        # past pose_safe_m (close a gap opened rounding a corner).
+        self.pose_stop_m   = float(cfg.get("pose_stop_m", 0.45))
+        self.pose_safe_m   = float(cfg.get("pose_safe_m", 1.00))
+        self.pose_speed    = float(cfg.get("pose_pursuit_speed", self.cruise_speed))
+
         self.rear_led_indices = list(cfg.get("rear_led_indices", [3, 4]))
 
         self._last_leader_t = -1e9
@@ -152,7 +178,9 @@ class FollowerFSM:
         self._close_stop = False
 
     def step(self, wm: WorldModel, turn_yaw_rad: Optional[float] = None,
-             fwd_dist_m: Optional[float] = None) -> Decision:
+             fwd_dist_m: Optional[float] = None,
+             leader_bearing_rad: Optional[float] = None,
+             leader_gap_m: Optional[float] = None) -> Decision:
         t = wm.t
         leader = wm.leader
         confident = leader is not None and leader.score >= self.grid_min_score
@@ -197,6 +225,18 @@ class FollowerFSM:
                 self._corner_dir = turn_dir
                 self._corner_until = t + self.corner_commit_s
 
+        # Sim pose bridge (pre-empts the vision lost-handling below ONLY when the
+        # leader's true pose is known — i.e. in the Godot sim; bearing is None on
+        # the real robot, which falls through to the lane fallback). Placed below
+        # the confident-FOLLOW return (so a re-detected marker instantly retakes)
+        # and the WAIT_LEAD arm gate (so it never lurches at a stationary boot
+        # leader), but ABOVE the close-stop latch and corner_mode dispatch (so it
+        # is not swallowed by close_stop / lane bias when the true gap is known).
+        # It deliberately mutates no latched state (_close_stop / _corner_dir /
+        # _last_*) so the real-bot recovery cues survive if the pose drops out.
+        if self.pose_pursuit_enabled and leader_bearing_rad is not None:
+            return self._pose_pursuit(leader_bearing_rad, leader_gap_m)
+
         # Lost at point-blank range: as the leader fills the frame its grid dots
         # leave view and the detection drops out. Latch a STOP so the follower
         # never creeps into the leader's back on a straight-line tailgate.
@@ -212,6 +252,46 @@ class FollowerFSM:
             return self._lost_turn_mode(wm, t, turn_yaw_rad, fwd_dist_m)
         return self._lost_lane_mode(wm, t)
 
+    def _pose_pursuit(self, bearing: float, gap_m: Optional[float]) -> Decision:
+        """SIM ONLY: marker lost but the leader's true Godot pose is known.
+        Steer straight at it. Convention (see agent.py): +bearing = leader to
+        the LEFT, and +steer turns LEFT, so steer has the SAME sign as the
+        bearing error. Speed tapers with the true metric gap so we hold a
+        marker-detectable distance and never ram. Mutates no latched state."""
+        # Leader (nearly) behind us — we overshot: hold rather than pivot or
+        # reverse, and let FOLLOW / the marker re-acquire from a clean bearing.
+        if abs(bearing) >= self.pose_behind_rad:
+            return self._mk(STATE_POSE, 0.0, 0.0, all_leds(GREEN))
+
+        err = 0.0 if abs(bearing) < self.pose_deadband_rad else bearing
+        steer = clamp(self.pose_p_gain * err, -self.max_steer, self.max_steer)
+
+        if gap_m is None:
+            speed = self.pose_speed
+        elif gap_m <= self.pose_stop_m:
+            speed = 0.0
+        elif gap_m >= self.pose_safe_m:
+            speed = self.pose_speed
+        else:
+            frac = (gap_m - self.pose_stop_m) / (self.pose_safe_m - self.pose_stop_m)
+            speed = self.pose_speed * frac
+
+        # motors_from_decision clamps |steer| <= base_speed, so a corner cannot
+        # be expressed without forward throttle. Raise the base enough to turn,
+        # but CAP the forward (closing) component at the gap taper so the floor
+        # never speeds us toward a near, nearly-aligned leader (which would
+        # defeat the taper's separation). Closing speed = base * cos(bearing): a
+        # sharp corner (|bearing|~90deg, cos~0) moves ACROSS not toward the
+        # leader, so it gets the full turn speed; a gentle off-axis (cos~1) stays
+        # at the tapered pace. Skipped when stopped for closeness (hold to let
+        # the leader separate back into marker range).
+        turn_need = min(abs(steer), self.pose_speed)
+        if speed > 0.0 and turn_need > speed:
+            cos_b = math.cos(err)
+            closing_cap = self.pose_speed if cos_b <= 0.05 else speed / cos_b
+            speed = min(turn_need, closing_cap)
+        return self._mk(STATE_POSE, speed, steer, all_leds(GREEN))
+
     def _lost_lane_mode(self, wm: WorldModel, t: float) -> Decision:
         """Default recovery: the leader is the lane, so keep following the lane,
         biased toward the remembered turn direction until the leader is re-seen.
@@ -219,15 +299,22 @@ class FollowerFSM:
         instead of spinning the bot off the road. The point-blank close-stop is
         handled in step() before this runs."""
         # While recently lost the leader is just around the corner: match its
-        # pace, not cruise, or the follower overruns it mid-turn. Past the
-        # window it is far -> cruise.
+        # pace, not cruise, or the follower overruns it mid-turn.
         in_pursuit = (t - self._last_leader_t) < self.pursuit_timeout_s
         bias = self._corner_bias(t, wm, in_pursuit)
 
         if wm.lane.healthy:
             steer = clamp(wm.lane.steering_suggestion + bias, -self.max_steer, self.max_steer)
-            speed = self.pursuit_speed if in_pursuit else self.cruise_speed
-            return self._mk(STATE_LANE, speed, steer, all_leds(YELLOW if bias else BLUE))
+            # Never drive BLIND faster than the following pace. The old code
+            # cruised at full speed once the pursuit window expired ("the leader
+            # must be far ahead, catch up"), but a blind follower has no distance
+            # feedback: at cruise it charges down whatever lane it is on and, at
+            # the first branch the leader did not take, drives clean off the map
+            # at full tilt (never recovering). Pursuit pace keeps it near the
+            # leader's path and lets the marker re-acquire; if the leader is
+            # genuinely gone it creeps, it does not bolt.
+            return self._mk(STATE_LANE, self.pursuit_speed, steer,
+                            all_leds(YELLOW if bias else BLUE))
 
         # Lane washed out (tight corner / bad frame): inside the pursuit window
         # creep along the remembered curve instead of parking. The lane is
@@ -277,13 +364,13 @@ class FollowerFSM:
             return self._mk(STATE_REACQUIRE, self.reacquire_creep,
                             self._reacquire_steer(t, wm, 0.0), all_leds(YELLOW))
 
-        # Grace expired: pursue along the lane. While the leader was seen
-        # recently it is just around the corner — match its pace instead of
-        # cruising, or the follower blindly overtakes it mid-turn.
+        # Grace expired: pursue along the lane at the leader's pace, never full
+        # cruise — a blind follower has no distance feedback, so cruising charges
+        # down the current lane and drives off the map at the first branch the
+        # leader did not take (see _lost_lane_mode).
         in_pursuit = (t - self._last_leader_t) < self.pursuit_timeout_s
         if wm.lane.healthy:
-            speed = self.pursuit_speed if in_pursuit else self.cruise_speed
-            return self._mk(STATE_LANE, speed, wm.lane.steering_suggestion, all_leds(BLUE))
+            return self._mk(STATE_LANE, self.pursuit_speed, wm.lane.steering_suggestion, all_leds(BLUE))
         # Lane momentarily unhealthy (tight curve / washed-out frame): keep
         # creeping inside the pursuit window instead of parking.
         if in_pursuit:

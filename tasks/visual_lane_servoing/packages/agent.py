@@ -17,6 +17,12 @@ _NUM_SLICES  = 3
 _SLICE_TOL   = 5
 _CLUSTER_GAP = 10   # px column gap that splits two clusters in a strip
 _MIN_CLUSTER = 3    # unique columns; anything narrower is a speck
+# The dashed yellow centerline is a THIN line in any strip. A cluster spanning
+# more than this fraction of the frame width is not a lane marking -- it is
+# off-road foliage caught by the broad yellow hue (the sim grass reads H~55-65),
+# which would drag the centerline mean sideways and make the per-slice picks
+# zigzag. Such wide yellow clusters are dropped before the centerline estimate.
+_YELLOW_MAX_CLUSTER_FRAC = 0.22
 
 # Lane half width per slice (far, mid, near), px at 640 wide. Perspective makes
 # the near slice span far wider than the far one, so a single shared value
@@ -24,14 +30,25 @@ _MIN_CLUSTER = 3    # unique columns; anything narrower is a speck
 _SLICE_HALF_WIDTHS = (175.0, 200.0, 270.0)
 
 
-def _cluster_means(cols: np.ndarray) -> list:
-    """Mean column of each contiguous cluster in a strip, left to right.
-    Clusters narrower than _MIN_CLUSTER unique columns are specks: dropped."""
+def _cluster_spans(cols: np.ndarray) -> list:
+    """(mean_column, pixel_span) for each contiguous cluster in a strip, left
+    to right. span = rightmost - leftmost column of the cluster. Clusters
+    narrower than _MIN_CLUSTER unique columns are specks: dropped."""
     xs = np.unique(cols)
     if xs.size == 0:
         return []
     splits = np.where(np.diff(xs) > _CLUSTER_GAP)[0] + 1
-    return [float(np.mean(c)) for c in np.split(xs, splits) if c.size >= _MIN_CLUSTER]
+    out = []
+    for c in np.split(xs, splits):
+        if c.size >= _MIN_CLUSTER:
+            out.append((float(np.mean(c)), float(c[-1] - c[0])))
+    return out
+
+
+def _cluster_means(cols: np.ndarray) -> list:
+    """Mean column of each contiguous cluster in a strip, left to right.
+    Clusters narrower than _MIN_CLUSTER unique columns are specks: dropped."""
+    return [m for m, _ in _cluster_spans(cols)]
 
 
 def detect_lines_in_slices(
@@ -44,35 +61,57 @@ def detect_lines_in_slices(
 
     The road has white lines on BOTH outer edges; a plain mean over all white
     pixels lands between them (left of our lane's edge) and steers the bot
-    onto the left lane. Pick the lane-edge cluster on the correct side of the
-    yellow centerline: when yellow is right-of-center the edge is the leftmost
-    white cluster; when yellow is left-of-center it is the rightmost.
+    onto the left lane. So we track the bot's OWN lane edge: the white cluster
+    on the far side of the yellow centerline from the opposing lane. For the
+    normal right-lane layout (yellow left-of-center) that is the RIGHTMOST
+    white cluster; the inverted layout (yellow right-of-center) tracks the
+    leftmost.
+
+    Edge SIDE is decided ONCE per frame from the nearest (most reliable) yellow
+    pick and applied to all three slices. Deciding it per-slice — as the old
+    code did, off each slice's own yellow vs 0.55*w — flipped sides mid-frame
+    on a curve (the far slice's yellow drifts across center while the near
+    slice's has not), so some slices latched the opposite-lane edge: the picks
+    zigzagged and the lane center fell on the wrong side, steering the bot off
+    the road. One side per frame keeps the edge track continuous.
     """
     slice_height = int(h * 0.35 / _NUM_SLICES)
     start_y      = int(h * _ROI_START)
     w            = mask_white.shape[1]
-    yellow_xs, white_xs = [], []
 
+    # First pass: yellow centerline per slice (far -> near).
+    yellow_xs, white_clusters = [], []
     for i in range(_NUM_SLICES):
         y = start_y + i * slice_height + slice_height // 2
+        strip_y = mask_yellow[y - _SLICE_TOL: y + _SLICE_TOL, :]
+        # Drop over-wide yellow clusters (off-road foliage) before averaging:
+        # the centerline is the set of THIN dash clusters, all near the same
+        # column, so their mean is the centerline; a fat off-road blob would
+        # otherwise pull the pick toward the road shoulder and zigzag it.
+        yclusters = [m for m, span in _cluster_spans(np.where(strip_y > 0)[1])
+                     if span <= _YELLOW_MAX_CLUSTER_FRAC * w]
+        yellow_xs.append(int(np.mean(yclusters)) if yclusters else None)
+        strip_w = mask_white[y - _SLICE_TOL: y + _SLICE_TOL, :]
+        white_clusters.append(_cluster_means(np.where(strip_w > 0)[1]))
 
-        strip_y  = mask_yellow[y - _SLICE_TOL: y + _SLICE_TOL, :]
-        clusters = _cluster_means(np.where(strip_y > 0)[1])
-        yellow_x = int(np.mean(clusters)) if clusters else None  # dashes = same centerline
-        yellow_xs.append(yellow_x)
+    # Decide the lane-edge side once, from the nearest yellow pick (the near
+    # strip is closest to the bot and least perspective-distorted). Default to
+    # the right edge (the right-lane norm) when no yellow is seen at all.
+    nearest_yellow = next((yx for yx in reversed(yellow_xs) if yx is not None), None)
+    track_left_edge = nearest_yellow is not None and nearest_yellow >= int(w * 0.55)
 
-        strip_w  = mask_white[y - _SLICE_TOL: y + _SLICE_TOL, :]
-        clusters = _cluster_means(np.where(strip_w > 0)[1])
-        white_x  = None
+    white_xs = []
+    for yellow_x, clusters in zip(yellow_xs, white_clusters):
+        white_x = None
         if clusters:
-            if yellow_x is not None and yellow_x >= int(w * 0.55):
-                white_x = int(clusters[0])
-                if white_x >= yellow_x:
-                    white_x = None
+            if track_left_edge:
+                cand = int(clusters[0])                      # leftmost
+                if yellow_x is None or cand < yellow_x:      # must be left of centerline
+                    white_x = cand
             else:
-                white_x = int(clusters[-1])
-                if yellow_x is not None and white_x <= yellow_x:
-                    white_x = None
+                cand = int(clusters[-1])                     # rightmost
+                if yellow_x is None or cand > yellow_x:      # must be right of centerline
+                    white_x = cand
         white_xs.append(white_x)
 
     return _near_anchored(yellow_xs), _near_anchored(white_xs)
@@ -107,6 +146,9 @@ class LaneServoingAgent:
         self.base_speed          = cfg.get('base_speed',          0.2)
         self.curve_speed         = cfg.get('curve_speed',         0.2)
         self.curve_threshold     = cfg.get('curve_threshold',     15)
+        # Reject implausibly large second differences as detection artifacts,
+        # not curves (sim straights produced |bend| ~ 300 from off-road picks).
+        self.curve_bend_max      = cfg.get('curve_bend_max',      90)
         self.steering_threshold  = cfg.get('steering_threshold',  0.2)
         self.curve_boost         = cfg.get('curve_boost',         1.3)
         self.detection_threshold = cfg.get('detection_threshold', 500)
@@ -236,7 +278,8 @@ class LaneServoingAgent:
 
         yellow_xs, white_xs = detect_lines_in_slices(mask_y, mask_w, h)
         both_visible        = left_det and right_det and not recovery
-        is_curve, curve_dir = detect_curve(yellow_xs, white_xs, self.curve_threshold)
+        is_curve, curve_dir = detect_curve(yellow_xs, white_xs, self.curve_threshold,
+                                           bend_max=self.curve_bend_max)
 
         raw_error            = self._calculate_error(yellow_xs, white_xs, left_det, right_det, w)
         self._filtered_error = 0.7 * self._filtered_error + 0.3 * raw_error

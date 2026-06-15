@@ -1,6 +1,7 @@
 base_speed: 0.31
 curve_speed: 0.25
 curve_threshold: 15
+curve_bend_max: 90
 d_gain: 0.79
 detection_threshold: 100
 heading_gain: 1.03

@@ -27,13 +27,32 @@ corner_commit_s:   3.0        # bias the lane steering toward the remembered cor
 corner_steer_bias: 0.12       # how hard to nudge toward the corner (added to lane steering,
                               #   clamped to +/- max_steer and to the base speed)
 
+# --- sim-only pose bridge (Godot gives the leader's true pose; real robot does
+#     NOT, so this auto-disables there and the lane fallback above is used) ---
+# While the marker is lost, steer straight at the leader's true position. Vision
+# cannot infer a sharp perpendicular intersection turn (marker centered until it
+# vanishes, follower's lane runs straight on), so lane mode diverges there; this
+# bridges ANY corner and hands back to vision FOLLOW the moment the grid re-detects.
+pose_pursuit:        true     # set false to force the pure-vision path even in sim
+pose_p_gain:         1.0      # steer per radian of leader-bearing error (+bearing=left => +steer)
+pose_deadband_rad:   0.05     # ignore tiny bearing error (anti-hunt near dead-ahead)
+pose_behind_rad:     2.6      # |bearing| past this (~150deg) => leader is behind: HOLD, never pivot/reverse
+pose_stop_m:         0.45     # metric gap taper: stop closer than this (never ram; let it separate
+pose_safe_m:         1.00     #   into marker range), full pursuit speed past pose_safe_m
+pose_pursuit_speed:  0.30     # forward pace during the pose bridge (defaults to cruise_speed)
+
 # --- lost handling ---
 leader_lost_grace_s:    0.4   # window after the grid drops before handing off to lane pursuit
 pursuit_timeout_s:      25.0  # pursue this long after the last sighting before HOLD
                               # (tight curves flicker lane health; don't park mid-corner)
-pursuit_speed:          0.17  # lane speed while the leader was seen recently: keep it just
-                              # above the leader's corner pace — at full cruise the follower
-                              # cuts the corner and blindly overtakes the leader mid-turn
+pursuit_speed:          0.11  # blind lane speed while the leader was seen recently. Keep it at
+                              # or just BELOW the leader's pace: a blind follower driving FASTER
+                              # than the leader overruns into point-blank range, where the big
+                              # circle-grid board overflows the frame and can NOT be re-detected
+                              # (findCirclesGrid needs the whole lattice) — so it stays blind and
+                              # diverges. At/below the leader's pace the gap holds in detection
+                              # range and the marker re-acquires. (Sim leader ~0.12 m/s; was 0.17
+                              # = 40% too fast and rammed the leader's bumper.)
 reacquire_creep_speed:  0.12  # slow creep while reacquiring into a corner
 reacquire_steer_gain:   0.8   # steer toward the last-seen marker bearing
 reacquire_heading_gain: 0.0   # best-effort tilt feed-forward; off by default (no intrinsics)

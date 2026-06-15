@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 
 from tasks.project_follow.packages.fsm import (  # noqa: E402
     FollowerFSM, STATE_WAIT, STATE_FOLLOW, STATE_CLOSE_STOP, STATE_REACQUIRE,
-    STATE_TURN, STATE_LANE, STATE_HOLD,
+    STATE_TURN, STATE_LANE, STATE_HOLD, STATE_POSE,
 )
 from tasks.project.packages.fsm_common import lateral_to_steer  # noqa: E402
 from tasks.project.packages.world_model import LaneObs, LeaderObs, SignObs, WorldModel  # noqa: E402
@@ -305,11 +305,72 @@ def test_lost_past_grace_falls_back_to_lane_then_hold():
     creep = fsm.step(_wm(2.1, leader=None, lane_healthy=False))
     assert creep.state_name == STATE_REACQUIRE
     assert abs(creep.base_speed - 0.12) < 1e-9
-    # Pursuit window expired: full cruise on a healthy lane, HOLD otherwise.
-    cruise = fsm.step(_wm(11.0, leader=None, lane_healthy=True))
-    assert cruise.state_name == STATE_LANE and abs(cruise.base_speed - 0.3) < 1e-9
+    # Pursuit window expired: still lane-follow at PURSUIT pace, never full
+    # cruise — a blind follower that cruises charges off the map at the first
+    # branch the leader did not take. HOLD only when the lane is also unhealthy.
+    after = fsm.step(_wm(11.0, leader=None, lane_healthy=True))
+    assert after.state_name == STATE_LANE and abs(after.base_speed - 0.15) < 1e-9
     hold = fsm.step(_wm(11.1, leader=None, lane_healthy=False))
     assert hold.state_name == STATE_HOLD and hold.base_speed == 0.0
+
+
+def test_pose_bridge_steers_toward_leader():
+    # SIM pose bridge: marker lost but the leader's true bearing is known.
+    # +bearing = leader to the LEFT, and +steer turns LEFT, so the steer takes
+    # the SAME sign as the bearing. It pre-empts the vision lane fallback.
+    fsm = FollowerFSM(_cfg())
+    fsm.step(_wm(0.0, leader=_leader(span=50)))                 # arm
+    left = fsm.step(_wm(0.5, leader=None, lane_healthy=True),
+                    leader_bearing_rad=0.5, leader_gap_m=0.8)
+    assert left.state_name == STATE_POSE and left.steering > 0 and left.base_speed > 0
+    right = fsm.step(_wm(0.6, leader=None, lane_healthy=True),
+                     leader_bearing_rad=-0.5, leader_gap_m=0.8)
+    assert right.state_name == STATE_POSE and right.steering < 0
+
+
+def test_pose_bridge_stops_when_close_and_holds_when_behind():
+    fsm = FollowerFSM(_cfg())
+    fsm.step(_wm(0.0, leader=_leader(span=50)))                 # arm
+    close = fsm.step(_wm(0.5, leader=None), leader_bearing_rad=0.0, leader_gap_m=0.2)
+    assert close.state_name == STATE_POSE and close.base_speed == 0.0   # too close: hold, don't ram
+    behind = fsm.step(_wm(0.6, leader=None), leader_bearing_rad=3.0, leader_gap_m=0.8)
+    assert behind.state_name == STATE_POSE and behind.base_speed == 0.0 and behind.steering == 0.0
+
+
+def test_marker_outranks_pose_bridge():
+    # A confident marker must still take FOLLOW even when a leader bearing is supplied.
+    fsm = FollowerFSM(_cfg())
+    fsm.step(_wm(0.0, leader=_leader(span=50)))                 # arm
+    d = fsm.step(_wm(0.5, leader=_leader(span=40, lateral=0.1)),
+                 leader_bearing_rad=0.5, leader_gap_m=0.8)
+    assert d.state_name == STATE_FOLLOW
+
+
+def test_pose_bridge_absent_preserves_vision_path():
+    # No bearing (the real robot, no leader pose) => the vision lane fallback is
+    # unchanged: pursuit-pace lane following inside the window.
+    fsm = FollowerFSM(_cfg(corner_mode="lane", pursuit_speed=0.15, pursuit_timeout_s=30.0))
+    fsm.step(_wm(0.0, leader=_leader(span=20)))                 # arm
+    d = fsm.step(_wm(2.0, leader=None, lane_healthy=True))      # no bearing supplied
+    assert d.state_name == STATE_LANE and abs(d.base_speed - 0.15) < 1e-9
+
+
+def test_pose_bridge_turn_floor_caps_closing_speed():
+    # The turn-floor must give enough base to ROTATE at a sharp corner without
+    # speeding the follower TOWARD a near, nearly-aligned leader (which would
+    # defeat the gap taper's separation). Closing speed = base*cos(bearing).
+    fsm = FollowerFSM(_cfg())
+    fsm.step(_wm(0.0, leader=_leader(span=50)))                 # arm
+    # Gentle off-axis, close (in the taper band): base must stay ~tapered, NOT
+    # jump to the pursuit speed.
+    gentle = fsm.step(_wm(0.5, leader=None), leader_bearing_rad=0.3, leader_gap_m=0.5)
+    assert gentle.state_name == STATE_POSE
+    assert gentle.base_speed < 0.05                            # held near the taper, not sped up
+    # Sharp ~80deg corner: motion is across (not toward) the leader, so it DOES
+    # get the turn speed to rotate.
+    sharp = fsm.step(_wm(0.6, leader=None), leader_bearing_rad=1.4, leader_gap_m=0.6)
+    assert sharp.state_name == STATE_POSE
+    assert sharp.base_speed > 0.2 and abs(sharp.steering) > 0.2
 
 
 def test_stop_signs_are_ignored():

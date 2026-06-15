@@ -112,6 +112,12 @@ def main(camera, wheels, leds, stop_event,
             gs = getattr(wheels, "game_state", None)
             if gs is not None and getattr(gs, "pose_x", None) is not None:
                 pose = (gs.pose_x, gs.pose_z, gs.heading_rad)
+            # Leader (NPC) ground-truth pose: sim only (Godot pushes npc_x/npc_z
+            # over the wheel channel; None on the real robot). Same world frame
+            # and units as our own pose, so directly comparable.
+            leader_pose = None
+            if gs is not None and getattr(gs, "npc_x", None) is not None:
+                leader_pose = (gs.npc_x, gs.npc_z)
             turn_yaw = None
             fwd_dist = None
             if in_maneuver and pose is not None and man_pose0 is not None:
@@ -119,7 +125,23 @@ def main(camera, wheels, leds, stop_event,
                 turn_yaw = math.atan2(math.sin(dth), math.cos(dth))
                 fwd_dist = math.hypot(pose[0] - man_pose0[0], pose[1] - man_pose0[1])
 
-            decision = fsm.step(wm, turn_yaw_rad=turn_yaw, fwd_dist_m=fwd_dist)
+            # Sim pose bridge for the FSM: bearing of the leader relative to our
+            # heading + the metric gap. heading uses the forward-vector
+            # convention fwd=(sin h, cos h), so the leader's world bearing is
+            # atan2(dx, dz); the wrapped error is the bearing the follower must
+            # steer onto. None on the real robot -> the FSM's vision fallback
+            # runs. (THE sim/real gate lives here, keeping the FSM pure logic.)
+            leader_bearing = None
+            leader_gap = None
+            if pose is not None and pose[2] is not None and leader_pose is not None:
+                dx = leader_pose[0] - pose[0]
+                dz = leader_pose[1] - pose[1]
+                dth = math.atan2(dx, dz) - pose[2]
+                leader_bearing = math.atan2(math.sin(dth), math.cos(dth))
+                leader_gap = math.hypot(dx, dz)
+
+            decision = fsm.step(wm, turn_yaw_rad=turn_yaw, fwd_dist_m=fwd_dist,
+                                leader_bearing_rad=leader_bearing, leader_gap_m=leader_gap)
 
             is_man = decision.state_name == STATE_TURN
             if is_man and not in_maneuver:

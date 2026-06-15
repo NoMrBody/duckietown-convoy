@@ -40,6 +40,13 @@ turn_radius_right_m: 0.17   # target arc radius for right turns (inner lane arc 
 # when a curve is detected (or steering demand is high).
 curve_speed_factor: 0.6      # CURVE-state speed = cruise * this
 curve_hold_s:       0.4      # hold CURVE this long after the last detection (no flapping)
+# ENTRY hysteresis: a single is_curve frame no longer arms the hold above. A
+# majority of a short sliding window must read curve before entering, so a
+# sporadic spurious sim bend can't pin CURVE on a straight; a sustained real
+# curve still enters within ~curve_enter_window_s.
+curve_enter_window_s:    0.30   # sliding window (~9 frames @30fps) used for the entry vote
+curve_enter_frac:        0.6    # >=60% of the window must be is_curve to ENTER
+curve_enter_min_samples: 4      # window must hold at least this many samples before it can fire
 steer_slowdown:     2.5      # speed scales by (1 - this * |steer|): more steering
                              # demand = sharper geometry = slower (continuous,
                              # replaces the old hard threshold)

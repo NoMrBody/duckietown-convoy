@@ -34,11 +34,19 @@ class LeadPerception:
         signs = self.signs.detect(gray)
         red = self.red.detect(frame_bgr)
 
+        ld = self.lane.last_debug_info
         self.last_debug_info = {
             "apriltag_ids": list(self.signs.last_tag_ids),
             "red_line": (round(red.width_frac, 2), round(red.dist_proxy, 2)) if red.present else None,
             "leader_source": None,
             "led_pair_px": None,
+            # Lane curve diagnostics (sim debugging): surface what the curve
+            # detector saw so the log/overlay can show WHY a curve fired.
+            "is_curve": bool(ld.get("is_curve", False)),
+            "curve_dir": int(ld.get("curve_dir", 0)),
+            "yellow_xs": ld.get("yellow_xs"),
+            "white_xs": ld.get("white_xs"),
+            "slice_ys": ld.get("slice_ys"),
         }
 
         return WorldModel(t=now, frame_w=w, frame_h=h, lane=lane_obs,

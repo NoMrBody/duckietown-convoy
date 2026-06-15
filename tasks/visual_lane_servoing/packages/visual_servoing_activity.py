@@ -22,8 +22,11 @@ _YELLOW_MAG_THRESHOLD = 30.0   # dashes are small; softer than the white gate
 _WHITE_MAG_THRESHOLD = 28.0
 
 # Desaturated / dim dash centers on dark road (glare washes S; distance drops V).
+# Upper hue 45 (was 65) for the same reason as the main yellow band in
+# lane_servoing_hsv_config.yaml: H>45 reaches green and caught the sim's off-road
+# grass (H~48-53). Real yellow is H=30, so 45 keeps a wide margin.
 _PALE_YELLOW_LOWER = np.array([8, 22, 40])
-_PALE_YELLOW_UPPER = np.array([65, 255, 255])
+_PALE_YELLOW_UPPER = np.array([45, 255, 255])
 # Shadowed / distant white tape can read purple-gray (H~155 S~48-81). OR-ed with
 # the main low-S white mask, then edge-gated — never used alone (road matches).
 _TINTED_WHITE_LOWER = np.array([130, 35, 175])
@@ -121,7 +124,17 @@ def detect_lane_markings(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         white_mask, cv2.MORPH_CLOSE,
         cv2.getStructuringElement(cv2.MORPH_RECT, (5, 15)))
     white_mask = _drop_small_blobs(white_mask, min_area=35)
-    white_mask = _keep_blobs_on_side(white_mask, 'left', 0.55)
+    # NO unconditional side filter: the per-slice picker in
+    # detect_lines_in_slices selects the bot's OWN lane edge relative to the
+    # yellow centerline (rightmost cluster when yellow is left-of-center, the
+    # normal right-lane case; leftmost when yellow is right-of-center) and its
+    # white_x>yellow_x / white_x<yellow_x guards already reject the opposite
+    # lane's edge. The previous _keep_blobs_on_side('left',0.55) amputated the
+    # bot's own right edge — the exact blob the picker hunts for — so the
+    # picker latched a wandering left-half blob and fabricated a spurious
+    # x0-2x1+x2 bend on degraded sim frames. Leave both real white edges in
+    # the mask; the picker then tracks ONE edge consistently (bend~0 on a
+    # straight).
 
     full_yellow = np.zeros((h, w), dtype=np.uint8)
     full_white  = np.zeros((h, w), dtype=np.uint8)

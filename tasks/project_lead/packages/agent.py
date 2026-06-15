@@ -181,6 +181,12 @@ def main(camera, wheels, leds, stop_event,
                             'route_idx': fsm.route_idx,
                             'route_step': fsm.last_step,
                             'fps': fps,
+                            # curve diagnostics for the video overlay
+                            'is_curve': dbg.get('is_curve'),
+                            'curve_dir': dbg.get('curve_dir'),
+                            'yellow_xs': dbg.get('yellow_xs'),
+                            'white_xs': dbg.get('white_xs'),
+                            'slice_ys': dbg.get('slice_ys'),
                         })
 
                 if now - last_dbg > 0.5:
@@ -190,6 +196,17 @@ def main(camera, wheels, leds, stop_event,
                           f"tags={dbg.get('apriltag_ids')} redline={dbg.get('red_line')} "
                           f"base={decision.base_speed:.2f} steer={decision.steering:+.2f} "
                           f"L={left:.2f} R={right:.2f}")
+                    # Curve diagnostics: print the per-line bends (x0-2x1+x2) so
+                    # we can see which line trips is_curve and by how much vs
+                    # the threshold (sim shows false curves on straights).
+                    yx, wx = dbg.get('yellow_xs'), dbg.get('white_xs')
+                    def _bend(xs):
+                        if xs and len(xs) == 3 and all(v is not None for v in xs):
+                            return xs[0] - 2 * xs[1] + xs[2]
+                        return None
+                    print(f"[lead]   curve={dbg.get('is_curve')} dir={dbg.get('curve_dir')} "
+                          f"y_xs={yx} w_xs={wx} "
+                          f"bend_y={_bend(yx)} bend_w={_bend(wx)}")
                     last_dbg = now
             except Exception as e:
                 if now - last_hw_warn > 2.0:
