@@ -24,9 +24,12 @@ auto_seed: null
 # Steps consumed one-per-intersection (each red-line event). Tokens:
 #   straight | right | left | stop   (stop = final, latched halt)
 # NOTE: spawn-relative — fixed mode executes tokens blindly in the order
-# intersections are met; it does NOT check the map. Current sim spawn:
-# bottom-left of the KIU map, west column, heading up toward the west T.
-route: [straight, straight, straight, left, right]
+# intersections are met; it does NOT check the map. Designed for the
+# bottom-left west-column spawn heading SOUTH (opposite lane). Resulting path:
+#   4-way(straight) -> top-T(left) -> west-T(left) -> 4-way(straight) ->
+#   top-T(left) -> 4-way(straight) -> STOP at the west-T.
+# Validate any route/spawn change with: python3 scripts/trace_route.py
+route: [straight, left, left, straight, left, straight, stop]
 
 # --- sim turn geometry (pose odometry only; the real robot keeps the
 #     field-tuned steer caps below) ---
