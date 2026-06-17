@@ -36,12 +36,18 @@ class SignDetector:
 
     # --- detector construction -------------------------------------------------
     def _make_detector(self, family: str):
-        try:
-            import cv2.aruco as aruco
-        except Exception as e:  # pragma: no cover - depends on the cv2 build
-            print(f"[lead] cv2.aruco unavailable ({e}); AprilTag sign detection "
-                  f"DISABLED. Install opencv-contrib-python.")
-            return None
+        # Some OpenCV builds ship cv2 as a single extension module rather than a
+        # package, so `import cv2.aruco` raises "'cv2' is not a package" even when
+        # the aruco module is bundled and reachable as the attribute cv2.aruco.
+        # Prefer the attribute; fall back to the submodule import (package builds).
+        aruco = getattr(cv2, "aruco", None)
+        if aruco is None:
+            try:
+                import cv2.aruco as aruco
+            except Exception as e:  # pragma: no cover - depends on the cv2 build
+                print(f"[lead] cv2.aruco unavailable ({e}); AprilTag sign "
+                      f"detection DISABLED. Install opencv-contrib-python.")
+                return None
 
         self._aruco = aruco
         dict_name = _APRILTAG_DICTS.get(str(family).lower(), "DICT_APRILTAG_36h11")
