@@ -378,7 +378,43 @@ def _bot_host(target):
     return target if target.replace('.', '').isdigit() else f"{target}.local"
 
 
-def package_task(task_name):
+# Base lane HSV file (shared default) and its per-bot override naming scheme.
+_HSV_BASE_NAME = 'lane_servoing_hsv_config.yaml'
+
+
+def _bot_hsv_override_path(bot_name):
+    """Path to a bot's HSV override file, or None if the name/file is absent."""
+    if not bot_name:
+        return None
+    path = os.path.join(PROJECT_ROOT, 'config',
+                        f'lane_servoing_hsv_config.{bot_name}.yaml')
+    return path if os.path.isfile(path) else None
+
+
+def _merged_hsv_bytes(base_path, override_path, bot_name):
+    """Merge a per-bot HSV override over the shared base; return YAML bytes.
+
+    Only keys present in the override win; everything else inherits the base.
+    Comments in the base are dropped (this is the shipped copy, not the repo
+    source), so a provenance header is prepended instead."""
+    import yaml
+    with open(base_path) as f:
+        base = yaml.safe_load(f) or {}
+    with open(override_path) as f:
+        override = yaml.safe_load(f) or {}
+    merged = {**base, **override}
+    changed = sorted(k for k in override if base.get(k) != override.get(k))
+    header = (
+        f"# AUTO-GENERATED at deploy time for bot '{bot_name}'.\n"
+        f"# Merged: config/{_HSV_BASE_NAME} <- "
+        f"config/lane_servoing_hsv_config.{bot_name}.yaml\n"
+        f"# Overridden keys: {', '.join(changed) if changed else '(none)'}\n"
+        f"# Edit the repo source files, not this generated copy.\n"
+    )
+    return (header + yaml.safe_dump(merged, sort_keys=False)).encode(), changed
+
+
+def package_task(task_name, bot_name=None):
     print(f"Packaging task: {task_name}")
     task_packages_dir = os.path.join(PROJECT_ROOT, 'tasks', task_name, 'packages')
     config_dir = os.path.join(PROJECT_ROOT, 'config')
@@ -387,8 +423,26 @@ def package_task(task_name):
         print(f"Error: Task packages directory not found: {task_packages_dir}")
         return None
 
+    # When a --bot name has a matching HSV override file, ship a merged copy as
+    # the active lane HSV config (the base recursive add then skips the raw base
+    # so it isn't clobbered back). No bot-side identity logic needed.
+    hsv_override = _bot_hsv_override_path(bot_name)
+    base_hsv_path = os.path.join(config_dir, _HSV_BASE_NAME)
+    merged_hsv = None
+    if bot_name and not hsv_override:
+        print(f"   [hsv] no override file for --bot '{bot_name}' "
+              f"(config/lane_servoing_hsv_config.{bot_name}.yaml); "
+              f"shipping shared base.")
+    elif hsv_override:
+        merged_hsv, changed = _merged_hsv_bytes(base_hsv_path, hsv_override, bot_name)
+        print(f"   [hsv] bot '{bot_name}': merged override over base "
+              f"({len(changed)} key(s): {', '.join(changed) or 'none differ'})")
+
     def no_pycache(tarinfo):
         if '__pycache__' in tarinfo.name or tarinfo.name.endswith('.pyc'):
+            return None
+        # Drop the raw base HSV file when a merged copy will be added in its place.
+        if merged_hsv is not None and tarinfo.name == f'config/{_HSV_BASE_NAME}':
             return None
         return tarinfo
 
@@ -423,6 +477,11 @@ def package_task(task_name):
         if os.path.exists(config_dir):
             print(f"   Adding configs: config/")
             tar.add(config_dir, arcname='config', filter=no_pycache)
+            if merged_hsv is not None:
+                info = tarfile.TarInfo(name=f'config/{_HSV_BASE_NAME}')
+                info.size = len(merged_hsv)
+                info.mode = 0o644
+                tar.addfile(info, io.BytesIO(merged_hsv))
         if os.path.exists(task_models_dir):
             print(f"   Adding models: tasks/{task_name}/models/")
             tar.add(task_models_dir, arcname=f'tasks/{task_name}/models', filter=no_pycache)
@@ -519,17 +578,21 @@ def run_on_bot(args):
         return 1
 
     task_name = args.task
-    bot_target = args.bot or args.host
+    # --host (IP) wins as the connection target; --bot can still be passed
+    # alongside it purely to select the per-bot HSV profile. With only --bot,
+    # connect to <bot>.local as before.
+    bot_target = args.host or args.bot
     deploy_port = args.deploy_port
     task_port = args.port
 
-    print(f"Task: {task_name}\nBot: {bot_target}\n")
+    profile = f" (hsv profile: {args.bot})" if args.bot else ""
+    print(f"Task: {task_name}\nBot: {bot_target}{profile}\n")
 
     print("[0/3] Stopping any running task...")
     stop_task_on_bot(bot_target, deploy_port)
 
     print("\n[1/3] Building and deploying...")
-    package = package_task(task_name)
+    package = package_task(task_name, bot_name=args.bot)
     if not package:
         return 1
     if not transfer_to_bot(bot_target, package, task_name, deploy_port):
@@ -550,7 +613,7 @@ def stop_on_bot(args):
     print("Stop Task!!")
     print()
 
-    bot_target = args.bot or args.host
+    bot_target = args.host or args.bot
     if not bot_target:
         print("Error: --bot or --host required")
         return 1
@@ -568,6 +631,7 @@ Examples:
   python launch.py --sim --task braitenberg --debug
   python launch.py --run --bot kvati --task braitenberg
   python launch.py --run --host 192.168.1.100 --task introduction
+  python launch.py --run --host 172.20.10.13 --bot V1 --task project_lead
   python launch.py --stop --bot kvati
         """
     )
@@ -577,8 +641,11 @@ Examples:
     parser.add_argument("--stop", action="store_true", help="Stop task on hardware")
 
     parser.add_argument("--task", type=str, default=None)
-    parser.add_argument("--bot",  type=str, default=None, help="Bot hostname (connects to <name>.local)")
-    parser.add_argument("--host", type=str, default=None, help="Bot IP address")
+    parser.add_argument("--bot",  type=str, default=None,
+                        help="Bot name: connects to <name>.local (unless --host is given) AND "
+                             "selects per-bot HSV override config/lane_servoing_hsv_config.<name>.yaml")
+    parser.add_argument("--host", type=str, default=None,
+                        help="Bot IP address (connection target; wins over --bot's .local)")
     parser.add_argument("--deploy-port", type=int, default=8000)
     parser.add_argument("--port", type=int, default=5000, help="Task web server port")
     parser.add_argument("--godot-path", type=str, default=None)

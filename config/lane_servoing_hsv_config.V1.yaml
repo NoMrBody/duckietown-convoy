@@ -1,0 +1,36 @@
+# Per-bot HSV override for bot "V1".  Selected at deploy time with:
+#     python3 launch.py --run --host <IP> --bot V1 --task project_lead
+# The launcher MERGES these keys over config/lane_servoing_hsv_config.yaml and
+# ships the result as the active config (only the keys below override the base;
+# anything omitted inherits the shared base). See launch.py:package_task.
+#
+# White tape samples from V1's camera (pink/blue cast — hue runs high, S stays
+# low-to-moderate). White is matched on low-S / high-V; hue is full-range:
+#   H 162 S 52 V 251  (px 605,331)
+#   H 155 S 30 V 228  (px 551,264)
+#   H 134 S 18 V 209  (px 496,197)
+# S tops out at 52 — give the cast headroom above the shared S_max (55) without
+# flooding gray road. V floor kept at the shared 120 so shadowed/distant tape
+# still registers.
+white_lower_h: 0
+white_lower_s: 0
+white_lower_v: 120
+white_upper_h: 179
+white_upper_s: 60
+white_upper_v: 255
+
+# Yellow line samples from V1's camera (orange-leaning, hue ~12-16):
+#   H 12 S 139 V 226  (px 40,273)
+#   H 16 S 126 V 198  (px 121,162)
+#   H 16 S 100 V 160  (px 205,71)
+# These already fall inside the shared band, so the floors stay permissive
+# (S=25 / V=45 catch dim, distant dashes). The one real change: pull the hue
+# ceiling down from the shared 65 to 45 — V1's yellow tops out at 16, and 65
+# reaches into green (the off-road-green-as-yellow failure mode). 45 keeps a
+# wide margin above 16 while cutting that green tail.
+yellow_lower_h: 8
+yellow_lower_s: 25
+yellow_lower_v: 45
+yellow_upper_h: 45
+yellow_upper_s: 255
+yellow_upper_v: 255
