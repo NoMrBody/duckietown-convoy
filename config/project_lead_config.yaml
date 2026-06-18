@@ -30,7 +30,7 @@ route: [straight, straight, straight, left, right]
 
 # --- sim turn geometry (pose odometry only; the real robot keeps the
 #     field-tuned steer caps below) ---
-turn_radius_left_m:  0.40   # target arc radius for left turns (outer lane arc ~0.43 m)
+turn_radius_left_m:  0.35   # target arc radius for left turns (outer lane arc ~0.43 m)
 turn_radius_right_m: 0.17   # target arc radius for right turns (inner lane arc ~0.17 m)
 
 # --- curve slowdown ---
