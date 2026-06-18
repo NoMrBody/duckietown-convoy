@@ -177,6 +177,7 @@ def main(camera, wheels, leds, stop_event,
                             'left_speed': left,
                             'right_speed': right,
                             'apriltag_ids': dbg.get('apriltag_ids', []),
+                            'apriltag_rejected': dbg.get('apriltag_rejected', 0),
                             'red_line': dbg.get('red_line'),
                             'route_idx': fsm.route_idx,
                             'route_step': fsm.last_step,
@@ -187,7 +188,8 @@ def main(camera, wheels, leds, stop_event,
                     dbg = perception.last_debug_info
                     print(f"[lead] {decision.state_name} "
                           f"route={fsm.route_idx}/{len(fsm.route)} "
-                          f"tags={dbg.get('apriltag_ids')} redline={dbg.get('red_line')} "
+                          f"tags={dbg.get('apriltag_ids')} rej={dbg.get('apriltag_rejected')} "
+                          f"redline={dbg.get('red_line')} "
                           f"base={decision.base_speed:.2f} steer={decision.steering:+.2f} "
                           f"L={left:.2f} R={right:.2f}")
                     last_dbg = now

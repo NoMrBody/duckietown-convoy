@@ -36,6 +36,7 @@ class LeadPerception:
 
         self.last_debug_info = {
             "apriltag_ids": list(self.signs.last_tag_ids),
+            "apriltag_rejected": int(getattr(self.signs, "last_rejected", 0)),
             "red_line": (round(red.width_frac, 2), round(red.dist_proxy, 2)) if red.present else None,
             "leader_source": None,
             "led_pair_px": None,

@@ -378,12 +378,30 @@ def video():
     return Response(generate_frames(), mimetype='multipart/x-mixed-replace; boundary=frame')
 
 
+@app.route('/raw.jpg')
+def raw_jpg():
+    """Latest RAW full-res camera frame — no montage, no overlay, no downscale.
+    This is the exact image the agent runs AprilTag detection on, for remote
+    debugging (the /video montage panel is half-res and overlaid)."""
+    _refresh_frame_if_paused()
+    frame = _frame_queue.get_latest()
+    if frame is None:
+        return ('no frame', 503)
+    ok, jpeg = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 95])
+    if not ok:
+        return ('encode failed', 500)
+    return Response(jpeg.tobytes(), mimetype='image/jpeg')
+
+
 @app.route('/status')
 def status():
     # Same shape as the sim server so the shared UI works unchanged; the real
     # robot has no localization (pose null) and no game state (empty -> hidden).
     with _debug_info_lock:
         info = dict(_debug_info)
+    live = getattr(agent, 'live', {}) or {}
+    signs = getattr(live.get('perception'), 'signs', None)
+    signs_diag = getattr(signs, 'diag', None)
     return jsonify({
         'agent': info,
         'agent_running': _agent_alive(),
@@ -392,6 +410,7 @@ def status():
         'game': {},
         'route': _ROUTE,
         'route_mode': _ROUTE_MODE,
+        'signs_diag': signs_diag,
     })
 
 

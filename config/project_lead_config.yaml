@@ -91,12 +91,11 @@ lane_healthy_min_pixels: 500
 # --- AprilTag traffic signs (Duckietown standard; cv2.aruco) ---
 # IDs MUST match your physical tags. Read them from the printed "tags=[...]"
 # (bot /status or /video page) or run: python scripts/decode_apriltag.py <photo>
-# NOTE: 25 and 26 are BOTH STOP-category IDs in Duckietown's apriltagsDB, so the
-# defaults below are placeholders -- verify and set your real STOP vs SLOW IDs.
-# (cv2.aruco needs opencv-contrib-python on the bot, else detection is disabled.)
+# VERIFIED via decode_apriltag.py on photos of the physical signs (tag36h11):
+# IDs 25, 26, 20. Assigned: 25 & 20 -> STOP, 26 -> SLOW.
 apriltag_family:    tag36h11   # tag36h11 | tag36h10 | tag25h9 | tag16h5
-apriltag_stop_ids:  [25]       # tag IDs that mean STOP  (VERIFY against your signs)
-apriltag_slow_ids:  [26]       # tag IDs that mean SLOW  (VERIFY against your signs)
+apriltag_stop_ids:  [25, 20]   # STOP signs (verified tag36h11)
+apriltag_slow_ids:  [26]       # SLOW-down sign (verified tag36h11)
 apriltag_min_area_px: 0        # was 400; 0 = remember any decoded tag (near-gate below halts)
 
 # A near STOP tag halts the bot directly (independent of the intersection red line).
