@@ -58,7 +58,17 @@ def main(camera, wheels, leds, stop_event,
     live['fsm'] = fsm
     live['perception'] = perception
 
+    # Echo exactly what this run will execute at each intersection, so a stale /
+    # mismatched deployed config (e.g. a route that doesn't match the repo) is
+    # obvious in the console instead of being silently driven.
+    print(f"[lead] route_mode={str(cfg.get('route_mode','fixed')).lower()} "
+          f"navigator={'on' if navigator is not None else 'off'} "
+          f"route={fsm.route}")
+    print(f"[lead] maneuver_timed={fsm.maneuver_timed} "
+          f"turn_time_s={fsm.turn_time_s} cross_time_s={fsm.cross_time_s}")
+
     last_state = None
+    last_route_idx = fsm.route_idx
     last_hw_warn = 0.0
     last_dbg = 0.0
     last_fps_update = 0.0
@@ -152,6 +162,14 @@ def main(camera, wheels, leds, stop_event,
                                     pose=pose, odo_source=odo_source)
                 if fsm.request_lane_reset:
                     perception.reset_lane()
+
+                # Intersection fired this frame: route_idx advanced. Print the
+                # exact step chosen and the maneuver it became, so a wrong route /
+                # mis-selected turn is unmistakable in the console.
+                if fsm.route_idx != last_route_idx:
+                    print(f"[lead] >>> INTERSECTION FIRE: route {last_route_idx}->{fsm.route_idx}"
+                          f"/{len(fsm.route)}  step={fsm.last_step!r}  -> {decision.state_name}")
+                    last_route_idx = fsm.route_idx
 
                 left, right = motors_from_decision(decision)
 

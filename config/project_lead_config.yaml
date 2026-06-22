@@ -9,8 +9,8 @@ cruise_speed: 0.30
 slow_factor:  0.50          # SLOW_ZONE speed = cruise * slow_factor
 
 # --- sign timing (seconds) ---
-stop_duration: 1.0          # halt this long at a STOP sign / intersection
-slow_duration: 1.5
+stop_duration: 2.0          # halt this long at a STOP sign / intersection
+slow_duration: 2.0
 slow_cooldown: 3.0
 
 # --- route ---
@@ -49,22 +49,36 @@ steer_slowdown:     2.5      # speed scales by (1 - this * |steer|): more steeri
 steer_floor_factor: 0.5      # never slow below this fraction of the base speed
 
 # --- maneuver shape / timing (FIELD-TUNE) ---
-turn_base_speed:    0.30    # forward speed during a turn arc
+turn_base_speed:    0.38    # forward speed during a turn arc (raised 0.30->0.38: lifts the
+                            # inner wheel clear of the motor deadzone so turns don't stall)
 turn_steer:         0.25    # steer magnitude during a turn (clamped to base by control)
 left_widen:         0.70    # left turns sweep wider: left steer law = turn_steer * this (1.0 = symmetric)
 left_base_factor:   1.00    # optional: scale forward speed during a left turn (>1 widens further)
-cross_base_speed:   0.30    # forward speed crossing straight through an intersection
+cross_base_speed:   0.36    # forward speed crossing straight through an intersection
 min_turn_s:         0.8     # don't accept lane-reacquire exit before this
 max_turn_s:         4.0     # hard timeout for a turn (raised from 3.0: a wider left turn needs more time)
-min_cross_s:        0.4
-max_cross_s:        2.0
+min_cross_s:        0.9
+max_cross_s:        2.5
 turn_yaw_target_rad: 1.40   # ~80 deg; encoder-yaw early exit (used only if encoders present)
 slow_after_turn_s:  2.0     # slow window after a maneuver so the follower reacquires
 slow_after_factor:  0.6     # speed during that window = cruise * this
 wheel_baseline_m:   0.10    # wheel-to-wheel distance for encoder yaw estimate
 
+# --- real-robot maneuver timing (FIELD-TUNE) ---
+# On the real bot the encoder yaw/distance is noisy and the lane reads "healthy"
+# the moment the intersection markings enter frame, so the odometry / reacquire
+# exits fired after a brief moment and the bot bailed before finishing the turn.
+# When maneuver_timed is on, each maneuver instead runs for a FIXED duration:
+# the bot holds a steady turn arc / drives straight for turn_time_s / cross_time_s,
+# then hands back to the lane controller. Sim ignores this (it has exact pose
+# odometry and keeps its tuned closed loop). Tune the two durations on the floor:
+# turn_time_s until a ~90 deg turn completes, cross_time_s until it clears the box.
+maneuver_timed:  true
+turn_time_s:     3.0        # hold the turn arc this long (≈ time to sweep ~90 deg)
+cross_time_s:    1.5        # drive straight across the intersection this long
+
 # --- closed-loop odometry maneuver targets (used when encoders are present) ---
-cross_distance_m:     0.35   # forward distance to clear one intersection tile (real)
+cross_distance_m:     0.50   # forward distance to clear one intersection tile (real)
 cross_distance_sim_m: 0.55   # sim (pose odometry): carry across the WHOLE unmarked
                              # box before handing back to the lane PD — releasing
                              # mid-box left it steering with no markings in view
@@ -95,7 +109,7 @@ lane_healthy_min_pixels: 500
 # IDs 25, 26, 20. Assigned: 25 & 20 -> STOP, 26 -> SLOW.
 apriltag_family:    tag36h11   # tag36h11 | tag36h10 | tag25h9 | tag16h5
 apriltag_stop_ids:  [25, 20]   # STOP signs (verified tag36h11)
-apriltag_slow_ids:  [26]       # SLOW-down sign (verified tag36h11)
+apriltag_slow_ids:  [26, 24]   # SLOW-down signs (26 verified; 24 added — verify with decode_apriltag.py)
 apriltag_min_area_px: 0        # was 400; 0 = remember any decoded tag (near-gate below halts)
 
 # A near STOP tag halts the bot directly (independent of the intersection red line).

@@ -268,6 +268,57 @@ def test_max_timeout_overrides_odometry():
                     turn_yaw_rad=0.0, fwd_dist_m=0.0).state_name == STATE_SLOW_AFTER
 
 
+def test_real_turn_is_timed_not_odometry():
+    # Real bot (maneuver_timed): a left turn runs for the full turn_time_s and
+    # ignores BOTH the early lane-reacquire and the noisy encoder-yaw exits that
+    # were bailing the turn out after a brief moment.
+    fsm = LeadFSM(_cfg(route=["left", "stop"], maneuver_timed=True,
+                       turn_time_s=3.0, cross_time_s=1.5, min_turn_s=0.8))
+    d = fsm.step(_wm(0.2, red=_red(), lane_healthy=False),
+                 turn_yaw_rad=0.0, fwd_dist_m=0.0, odo_source="encoders")
+    assert d.state_name == STATE_TURN_L and d.steering > 0.0
+    # lane "reacquires" early AND the (bad) yaw says past target -> still turning
+    d = fsm.step(_wm(1.0, lane_healthy=True),
+                 turn_yaw_rad=2.0, fwd_dist_m=0.0, odo_source="encoders")
+    assert d.state_name == STATE_TURN_L, "timed turn bailed early on lane/odo"
+    d = fsm.step(_wm(2.9, lane_healthy=True),
+                 turn_yaw_rad=2.0, fwd_dist_m=0.0, odo_source="encoders")
+    assert d.state_name == STATE_TURN_L
+    # past turn_time_s (elapsed from the 0.2s fire) -> hand back to slow-after
+    d = fsm.step(_wm(3.3, lane_healthy=True),
+                 turn_yaw_rad=2.0, fwd_dist_m=0.0, odo_source="encoders")
+    assert d.state_name == STATE_SLOW_AFTER
+
+
+def test_real_cross_is_timed_and_straight():
+    # Real bot (maneuver_timed): a straight cross runs for cross_time_s, drives
+    # dead-straight (no encoder-yaw heading hold), and ignores the distance exit.
+    fsm = LeadFSM(_cfg(route=["straight", "stop"], maneuver_timed=True,
+                       turn_time_s=3.0, cross_time_s=1.5))
+    d = fsm.step(_wm(0.2, red=_red(), lane_healthy=False),
+                 turn_yaw_rad=0.5, fwd_dist_m=99.0, odo_source="encoders")
+    assert d.state_name == STATE_CROSS and abs(d.steering) < 1e-9   # straight, yaw ignored
+    d = fsm.step(_wm(1.0, lane_healthy=True),
+                 turn_yaw_rad=0.5, fwd_dist_m=99.0, odo_source="encoders")
+    assert d.state_name == STATE_CROSS, "timed cross bailed early on distance"
+    d = fsm.step(_wm(1.9, lane_healthy=True),
+                 turn_yaw_rad=0.5, fwd_dist_m=99.0, odo_source="encoders")
+    assert d.state_name == STATE_SLOW_AFTER
+
+
+def test_sim_pose_ignores_maneuver_timed():
+    # The flag only governs the real-bot path: even with maneuver_timed set and a
+    # huge turn_time_s, the sim (odo_source="pose") still ends the turn on its
+    # exact pose-odometry yaw target rather than waiting out the timer.
+    fsm = LeadFSM(_cfg(route=["left", "stop"], maneuver_timed=True, turn_time_s=99.0,
+                       turn_yaw_target_rad=1.40, max_turn_s=99.0))
+    fsm.step(_wm(0.2, red=_red(), lane_healthy=False),
+             turn_yaw_rad=0.0, fwd_dist_m=0.0, odo_source="pose")
+    d = fsm.step(_wm(0.8, lane_healthy=False),
+                 turn_yaw_rad=1.4, fwd_dist_m=0.5, odo_source="pose")
+    assert d.state_name == STATE_SLOW_AFTER  # yaw target reached, not held for 99s
+
+
 def test_lane_lost_halts_after_grace_and_recovers():
     fsm = LeadFSM(_cfg())
     assert fsm.step(_wm(0.1)).state_name == STATE_LANE

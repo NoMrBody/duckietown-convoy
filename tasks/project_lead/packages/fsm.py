@@ -70,6 +70,18 @@ class LeadFSM:
         self.slow_after_turn_s = float(cfg.get("slow_after_turn_s", 2.0))
         self.slow_after_factor = float(cfg.get("slow_after_factor", 0.6))
 
+        # Real-robot maneuvers: drive each turn / cross for a FIXED wall-clock
+        # duration instead of ending on odometry or lane-reacquire. The
+        # single-channel DB21 encoders give a noisy yaw/distance estimate, and
+        # the lane reads "healthy" the moment the intersection's perpendicular /
+        # exit markings enter frame, so the distance / heading / reacquire exits
+        # all tripped after a brief moment and the bot bailed before completing
+        # the turn. Sim keeps its exact, tuned pose-odometry closed loop — this
+        # only engages when odo_source != "pose" (i.e. never in sim).
+        self.maneuver_timed = bool(cfg.get("maneuver_timed", False))
+        self.turn_time_s    = float(cfg.get("turn_time_s", 3.0))
+        self.cross_time_s   = float(cfg.get("cross_time_s", 1.5))
+
         # Slow down through map curves: the lane PD's steering differential
         # was tuned around the lane agent's own base speed — at full cruise
         # the same steer yields proportionally less curvature and the bot
@@ -307,12 +319,18 @@ class LeadFSM:
         # otherwise fall back to the legacy timed / lane-reacquire behaviour.
         have_odo = turn_yaw_rad is not None and fwd_dist_m is not None
 
+        # Real robot: end the maneuver on a fixed wall-clock duration (see
+        # __init__). Sim (odo_source == "pose") keeps the closed loop below.
+        timed = self.maneuver_timed and odo_source != "pose"
+
         # In sim, carry the cross through the whole unmarked intersection box
         # (pose odometry is exact); the field-tuned distance stays for real.
         cross_target = self.cross_distance_sim_m if odo_source == "pose" else self.cross_distance_m
 
         done = False
-        if elapsed >= max_s:                                   # hard safety timeout
+        if timed:                                              # fixed-duration maneuver
+            done = elapsed >= (self.turn_time_s if is_turn else self.cross_time_s)
+        elif elapsed >= max_s:                                 # hard safety timeout
             done = True
         elif have_odo:
             if is_turn and abs(turn_yaw_rad) >= (self.turn_yaw_target - self.turn_yaw_tol_rad):
@@ -352,7 +370,7 @@ class LeadFSM:
                 steer_cap = clamp(base * self.baseline_m / (2.0 * max(radius, 1e-3)),
                                   0.02, self.turn_steer)
                 steer_floor = 0.45 * steer_cap
-            if have_odo and self.turn_yaw_target > 0:
+            if have_odo and self.turn_yaw_target > 0 and not timed:
                 # Taper steer as the remaining yaw error shrinks, with a floor so
                 # the bot keeps rotating until it reaches the target heading.
                 yaw_err = self.turn_yaw_target - abs(turn_yaw_rad)
@@ -360,14 +378,17 @@ class LeadFSM:
                             steer_floor, steer_cap)
                 steer = sign * mag
             else:
-                steer = sign * steer_cap                       # legacy fixed arc
+                # Timed (real robot) or no odometry: hold a fixed steady arc for
+                # the whole duration — we don't trust the encoder yaw to taper.
+                steer = sign * steer_cap
             name = STATE_TURN_L if step == "left" else STATE_TURN_R
             return self._decide(name, base, steer, WHITE)
 
         # Straight cross: hold heading with a small P term on yaw drift.
         # yaw > 0 means drifting left -> negative steer corrects back right.
+        # In timed mode the encoder yaw isn't trusted, so just drive straight.
         steer = 0.0
-        if have_odo:
+        if have_odo and not timed:
             steer = clamp(-self.heading_kp * turn_yaw_rad, -self.turn_steer, self.turn_steer)
         return self._decide(STATE_CROSS, self.cross_base, steer, WHITE)
 
