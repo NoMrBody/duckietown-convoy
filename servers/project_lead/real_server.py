@@ -335,7 +335,13 @@ _last_manual_cmd  = 0.0
 _manual_watchdog  = None
 _MANUAL_TIMEOUT   = 0.6     # seconds of silence before the deadman cuts power
 _MANUAL_MAX       = 0.45    # forward/back wheel magnitude cap [-1, 1]
-_MANUAL_TURN      = 0.35    # turn differential added to each wheel
+_MANUAL_TURN      = 0.35    # turn differential added to each wheel WHILE moving
+_MANUAL_SPIN      = 0.60    # in-place pivot (tank turn) wheel magnitude when there is
+                            # NO forward/back input. Higher than _MANUAL_TURN on purpose:
+                            # spinning on the spot scrubs both wheels sideways, which needs
+                            # far more torque than a rolling arc to break static friction.
+                            # FIELD-TUNE: raise toward 0.8 if it still won't pivot; lower if
+                            # it spins too fast to control.
 
 
 def _zero_wheels():
@@ -552,8 +558,16 @@ def drive():
         ang = max(-1.0, min(1.0, float(body.get('angular', 0.0))))
     except (TypeError, ValueError):
         return jsonify(status='error', message='bad drive values')
-    left  = max(-1.0, min(1.0, lin * _MANUAL_MAX + ang * _MANUAL_TURN))
-    right = max(-1.0, min(1.0, lin * _MANUAL_MAX - ang * _MANUAL_TURN))
+    if abs(lin) < 1e-9 and ang != 0.0:
+        # Pure turn, no forward/back -> tank turn: spin in place with opposite-sign
+        # wheels at the stronger pivot magnitude so it actually breaks loose.
+        left  =  ang * _MANUAL_SPIN
+        right = -ang * _MANUAL_SPIN
+    else:
+        left  = lin * _MANUAL_MAX + ang * _MANUAL_TURN
+        right = lin * _MANUAL_MAX - ang * _MANUAL_TURN
+    left  = max(-1.0, min(1.0, left))
+    right = max(-1.0, min(1.0, right))
     if wheels is not None:
         try:
             wheels.set_wheels_speed(left, right)
