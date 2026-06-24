@@ -75,7 +75,24 @@ wheel_baseline_m:   0.10    # wheel-to-wheel distance for encoder yaw estimate
 # turn_time_s until a ~90 deg turn completes, cross_time_s until it clears the box.
 maneuver_timed:  true
 turn_time_s:     3.0        # hold the turn arc this long (≈ time to sweep ~90 deg)
-cross_time_s:    1.5        # drive straight across the intersection this long
+cross_time_s:    3.0        # drive straight across the intersection this long
+
+# --- lead steering smoother (FIELD-TUNE, real-only) ---
+# At the real bot's low frame rate the intersection's stop-line + exit markings
+# entering the lane band throw a one-frame steering spike right before
+# CROSS_STRAIGHT; the motor mixer turns that into a hard right wheel differential
+# (a visible jerk) then a snap to straight. Smooth the lane STEER INPUT so the
+# spike is bounded per frame and decays into the cross. Applies on the REAL ROBOT
+# ONLY (gated on the absence of a Godot pose); the sim's tuned closed loop is left
+# untouched. Only the lane-following steer is smoothed — the timed turn arc is
+# passed through unchanged, so turn_time_s still sweeps its full angle.
+steer_lp_enabled: true     # master on/off for the smoother
+steer_lp_hz:      1.0      # dt-aware low-pass cutoff (Hz); ≈0.80/frame alpha at 3.8 FPS
+steer_slew_per_s: 0.55     # per-frame magnitude-slew cap (steer-units/s) ≈0.14/frame at
+                           # 3.8 FPS. LOWER (→0.40) if it still jerks; RAISE (→0.80) if
+                           # curve entry feels capped.
+steer_dt_max:     0.4      # cap the dt the filter sees (s) so a camera dropout can't
+                           # blow the slew ceiling open and re-admit the jerk on recovery.
 
 # --- closed-loop odometry maneuver targets (used when encoders are present) ---
 cross_distance_m:     0.50   # forward distance to clear one intersection tile (real)

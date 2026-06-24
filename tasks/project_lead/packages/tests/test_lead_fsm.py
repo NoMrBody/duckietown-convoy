@@ -12,6 +12,7 @@ from tasks.project_lead.packages.fsm import (  # noqa: E402
     LeadFSM, STATE_LANE, STATE_STOP, STATE_TURN_R, STATE_TURN_L, STATE_SLOW_AFTER,
     STATE_DONE, STATE_SLOW, STATE_CROSS, STATE_LOST,
 )
+from tasks.project.packages.control import motors_from_decision  # noqa: E402
 from tasks.project.packages.world_model import LaneObs, RedLineObs, SignObs, WorldModel  # noqa: E402
 
 
@@ -349,6 +350,149 @@ def test_lane_lost_grace_restarts_after_maneuver():
     # grace spent without reacquiring -> now halt
     d = fsm.step(_wm(7.5, lane_healthy=False))
     assert d.state_name == STATE_LOST and d.base_speed == 0.0
+
+
+# --- steering smoother (real-only): kills the pre-intersection right jerk ------
+# All of these must set maneuver_timed=True so the smoother engages (it is gated
+# to the real timed path). Default knobs: steer_lp_hz=1.0, steer_slew_per_s=0.55.
+DT = 0.26  # ~3.8 FPS, the real bot's observed frame time
+
+def _smcfg(**over):
+    base = dict(route=["straight", "stop"], cruise_speed=0.3, maneuver_timed=True,
+                cross_time_s=5.0, turn_steer=0.25, left_widen=0.7)
+    base.update(over)
+    return _cfg(**base)
+
+
+def test_steer_input_spike_is_slew_capped_and_reaches_base_speed():
+    # The load-bearing claim: smoothing the INPUT bounds the spike AND feeds the
+    # speed scale, so base_speed is no longer collapsed by the RAW steer.
+    fsm = LeadFSM(_smcfg())
+    t = 0.0
+    for _ in range(4):                                   # settle straight
+        fsm.step(_wm(t, steer=0.0), odo_source="encoders"); t += DT
+    d = fsm.step(_wm(t, steer=0.30), odo_source="encoders")   # the right spike
+    assert d.state_name == STATE_LANE
+    assert abs(d.steering) <= 0.55 * DT + 1e-6           # capped to the slew ceiling
+    assert abs(d.steering) < 0.30                        # strictly below the raw spike
+    # base_speed derives from the SMOOTHED steer (~0.14 -> ~0.19), not the raw
+    # 0.30 (which would floor base to 0.3*0.5 = 0.15). Proves input-smoothing.
+    assert d.base_speed > 0.16
+
+
+def test_lane_to_cross_ramps_down_not_snaps():
+    # Sustained right steer through the approach, then the intersection fires the
+    # straight cross. Steering must DECAY through the cross, not snap to 0.
+    fsm = LeadFSM(_smcfg())
+    t = 0.0
+    for _ in range(6):                                   # settle the smoother near 0.30
+        fsm.step(_wm(t, steer=0.30), odo_source="encoders"); t += DT
+    pre = fsm._steer_cmd
+    assert pre > 0.25                                    # smoother tracked the steer
+    d = fsm.step(_wm(t, red=_red(), lane_healthy=False), turn_yaw_rad=0.0,
+                 fwd_dist_m=0.0, odo_source="encoders"); t += DT
+    assert d.state_name == STATE_CROSS
+    assert 0.0 < d.steering < pre                        # decaying, still turning (no snap)
+    prev = d.steering
+    for _ in range(4):                                   # strictly decreasing toward straight
+        d = fsm.step(_wm(t, lane_healthy=False), turn_yaw_rad=0.0,
+                     fwd_dist_m=0.0, odo_source="encoders"); t += DT
+        assert d.state_name == STATE_CROSS and d.steering < prev + 1e-9
+        prev = d.steering
+    assert abs(prev) < 0.02                              # essentially straight within ~4 frames
+
+
+def test_smoothed_wheel_jerk_smaller_than_unsmoothed():
+    # WHEEL-level assertion (per the spec): the single-frame change in the wheel
+    # differential at the LANE->CROSS boundary must be far smaller when smoothed.
+    def run(enabled):
+        fsm = LeadFSM(_smcfg(steer_lp_enabled=enabled))
+        t, diffs = 0.0, []
+        seq = [(0.30, None)] * 6 + [(0.0, _red())]       # approach, then fire cross
+        for steer, red in seq:
+            d = fsm.step(_wm(t, steer=steer, red=red, lane_healthy=(red is None)),
+                         turn_yaw_rad=0.0, fwd_dist_m=0.0, odo_source="encoders")
+            left, right = motors_from_decision(d)
+            diffs.append((d.state_name, right - left))
+            t += DT
+        # boundary = last LANE diff vs first CROSS diff
+        lane_diffs = [v for s, v in diffs if s == STATE_LANE]
+        cross_diffs = [v for s, v in diffs if s == STATE_CROSS]
+        return abs(cross_diffs[0] - lane_diffs[-1])
+
+    smoothed = run(True)
+    unsmoothed = run(False)
+    assert unsmoothed > 0.25                             # the real jerk: ~0.30 -> 0 snap
+    assert smoothed < unsmoothed * 0.25                  # smoothed boundary step is tiny
+
+
+def test_timed_turn_arc_is_not_smoothed():
+    # Constraint 2: the timed turn arc must pass through EXACTLY (no lag), so its
+    # field-tuned swept angle over turn_time_s is preserved.
+    fsm = LeadFSM(_smcfg(route=["left", "stop"], turn_time_s=5.0))
+    t = 0.0
+    expect = 0.25 * 0.7                                  # turn_steer * left_widen
+    d = fsm.step(_wm(t, red=_red(), lane_healthy=False), turn_yaw_rad=0.0,
+                 fwd_dist_m=0.0, odo_source="encoders"); t += DT
+    assert d.state_name == STATE_TURN_L
+    for _ in range(4):                                   # exact on the first AND every frame
+        assert abs(d.steering - expect) < 1e-9
+        d = fsm.step(_wm(t, lane_healthy=False), turn_yaw_rad=0.0,
+                     fwd_dist_m=0.0, odo_source="encoders"); t += DT
+
+
+def test_sim_lane_bypasses_smoother():
+    # The sim is gated out by the PRESENCE of a Godot pose, not by odo_source:
+    # in lane states odo_source is None on BOTH platforms (it is only "pose"
+    # inside maneuvers). With a pose supplied (sim), the smoother must be OFF and
+    # emit the raw lane steer, leaving the tuned sim closed loop untouched.
+    fsm = LeadFSM(_smcfg())
+    t = 0.0
+    last = None
+    for _ in range(4):
+        last = fsm.step(_wm(t, steer=0.30), pose=(0.0, 0.0, 0.0), odo_source=None); t += DT
+    assert last.state_name == STATE_LANE
+    assert abs(last.steering - 0.30) < 1e-9              # exact passthrough in the sim lane state
+
+
+def test_frame_dropout_does_not_reopen_the_jerk():
+    # A long gap (dropped camera frames) must NOT let the slew cap go non-binding:
+    # dt is capped at steer_dt_max, so the recovery-frame step stays bounded
+    # instead of jumping the full multi-second worth of slew.
+    fsm = LeadFSM(_smcfg(steer_dt_max=0.4, steer_slew_per_s=0.55))
+    fsm.step(_wm(0.0, steer=0.0), odo_source="encoders")          # seed at 0
+    d = fsm.step(_wm(5.0, steer=0.40), odo_source="encoders")     # 5 s gap, then a spike
+    assert d.state_name == STATE_LANE
+    assert abs(d.steering) <= 0.55 * 0.4 + 1e-6                   # bounded by slew * dt_max
+
+
+def test_negative_slew_rate_is_safe():
+    # A misconfigured negative slew rate must not invert the clamp; it is floored
+    # to 0 at load and degrades to low-pass-only (still bounded, correct sign).
+    fsm = LeadFSM(_smcfg(steer_slew_per_s=-0.5))
+    assert fsm.steer_slew_per_s == 0.0
+    t = 0.0
+    fsm.step(_wm(t, steer=0.0), odo_source="encoders"); t += DT
+    d = fsm.step(_wm(t, steer=0.30), odo_source="encoders")
+    assert 0.0 < d.steering < 0.30                                # low-pass only, no blow-up
+
+
+def test_disabled_knob_is_identity():
+    # steer_lp_enabled=False reproduces today's exact steering (regression A/B).
+    fsm = LeadFSM(_smcfg(steer_lp_enabled=False))
+    t = 0.0
+    for _ in range(3):
+        fsm.step(_wm(t, steer=0.0), odo_source="encoders"); t += DT
+    d = fsm.step(_wm(t, steer=0.30), odo_source="encoders")
+    assert abs(d.steering - 0.30) < 1e-9
+
+
+def test_first_frame_no_transient():
+    # First-ever step with dt=0 (no prior timestamp): hold the 0.0 seed, no jump.
+    fsm = LeadFSM(_smcfg())
+    d = fsm.step(_wm(0.0, steer=0.20), odo_source="encoders")
+    assert d.state_name == STATE_LANE
+    assert abs(d.steering) < 1e-9
 
 
 def _run():
