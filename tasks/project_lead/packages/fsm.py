@@ -82,6 +82,12 @@ class LeadFSM:
         self.maneuver_timed = bool(cfg.get("maneuver_timed", False))
         self.turn_time_s    = float(cfg.get("turn_time_s", 3.0))
         self.cross_time_s   = float(cfg.get("cross_time_s", 1.5))
+        # Real bot only: a small fixed steer bias held during the straight cross
+        # to cancel a physical wheel-imbalance drift (+ steer = left, - = right).
+        # The wheel trim is multiplicative and tuned at lane speed; at the fixed
+        # (higher) cross speed it leaves a residual veer. Gated to the timed/real
+        # path below so the sim's ideal closed-loop cross stays at zero.
+        self.cross_trim     = float(cfg.get("cross_trim", 0.0))
 
         # Slow down through map curves: the lane PD's steering differential
         # was tuned around the lane agent's own base speed — at full cruise
@@ -469,10 +475,14 @@ class LeadFSM:
 
         # Straight cross: hold heading with a small P term on yaw drift.
         # yaw > 0 means drifting left -> negative steer corrects back right.
-        # In timed mode the encoder yaw isn't trusted, so just drive straight.
+        # In timed mode the encoder yaw isn't trusted, so just drive straight,
+        # holding a small fixed cross_trim to cancel the real bot's straight-cross
+        # drift (gated to timed so the sim cross stays dead straight at 0).
         raw_cross = 0.0
         if have_odo and not timed:
             raw_cross = clamp(-self.heading_kp * turn_yaw_rad, -self.turn_steer, self.turn_steer)
+        elif timed:
+            raw_cross = self.cross_trim
         # Run the cross target through the SAME smoother so the steer carried in
         # from the lane approach (the spike) decays smoothly to it — this is what
         # turns the "jerk right then snap straight" into a clean ramp.

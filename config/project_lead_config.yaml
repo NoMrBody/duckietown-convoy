@@ -33,7 +33,10 @@ route: [straight, left, left, straight, left, straight, stop]
 
 # --- sim turn geometry (pose odometry only; the real robot keeps the
 #     field-tuned steer caps below) ---
-turn_radius_left_m:  0.40   # target arc radius for left turns (outer lane arc ~0.43 m)
+turn_radius_left_m:  0.85   # SIM ONLY (pose odometry). Target arc radius for left turns.
+                            # Trimmed 1.00->0.85 (a little less wide). Sim ends the turn on yaw target
+                            # (not time); left_base_factor (1.8) also sets the sim left-turn speed.
+                            # (Real bot ignores this knob -- its width comes from left_base_factor.)
 turn_radius_right_m: 0.17   # target arc radius for right turns (inner lane arc ~0.17 m)
 
 # --- curve slowdown ---
@@ -52,11 +55,22 @@ steer_floor_factor: 0.5      # never slow below this fraction of the base speed
 turn_base_speed:    0.38    # forward speed during a turn arc (raised 0.30->0.38: lifts the
                             # inner wheel clear of the motor deadzone so turns don't stall)
 turn_steer:         0.25    # steer magnitude during a turn (clamped to base by control)
-left_widen:         0.70    # left turns sweep wider: left steer law = turn_steer * this (1.0 = symmetric)
-left_base_factor:   1.00    # optional: scale forward speed during a left turn (>1 widens further)
+left_widen:         0.40    # REAL bot (timed turn). Left steer = turn_steer * this -> 0.25*0.40 = 0.10.
+                            # Lowered 0.70->0.40: arc radius R = base*baseline/(2*steer), so LESS steer =
+                            # WIDER radius. Combined with left_base_factor below this ~DOUBLES the left
+                            # radius (was cutting into the oncoming lane). Lower steer also shrinks the
+                            # swept angle (angle ~ steer*turn_time_s), so turn_time_s was raised to keep
+                            # the turn at ~90 deg -- the two move together.
+left_base_factor:   1.50    # REAL bot. Forward speed during a left turn only (base = 0.38*1.50 = 0.57).
+                            # This one knob sets BOTH the speed AND the radius: R ~ base/steer, so
+                            # lowering it slows the turn down AND tightens the arc together (the two
+                            # move 1:1). The swept angle (steer*turn_time_s) does NOT depend on base,
+                            # so the turn DURATION is untouched -- this won't make the turn "long" again.
+                            # 2.2->1.8->1.5: each step ~15-18% slower and tighter. Go lower to slow/
+                            # tighten more; raise to speed up/widen. CEILING base+steer < 1.0 (max ~2.35).
 cross_base_speed:   0.36    # forward speed crossing straight through an intersection
 min_turn_s:         0.8     # don't accept lane-reacquire exit before this
-max_turn_s:         4.0     # hard timeout for a turn (raised from 3.0: a wider left turn needs more time)
+max_turn_s:         6.0     # hard timeout for a turn (raised to clear the longer 5.0s timed left turn)
 min_cross_s:        0.9
 max_cross_s:        2.5
 turn_yaw_target_rad: 1.40   # ~80 deg; encoder-yaw early exit (used only if encoders present)
@@ -74,8 +88,19 @@ wheel_baseline_m:   0.10    # wheel-to-wheel distance for encoder yaw estimate
 # odometry and keeps its tuned closed loop). Tune the two durations on the floor:
 # turn_time_s until a ~90 deg turn completes, cross_time_s until it clears the box.
 maneuver_timed:  true
-turn_time_s:     3.0        # hold the turn arc this long (≈ time to sweep ~90 deg)
+turn_time_s:     2.375      # hold the turn arc this long. 5.0->2.5->2.375 (-5%): the turn was running
+                            # ~twice as long as it should (over-sweeping). This ONLY changes the
+                            # duration/angle, NOT the radius -- the wide arc (left_widen 0.40 +
+                            # left_base_factor 1.8) is untouched, so the turn stays wide but ends
+                            # sooner. Nudge UP if it now stops short of 90 deg (under-rotates), DOWN
+                            # if it still over-rotates. NOTE: shared by left AND right turns (the
+                            # current route has no rights, so this only affects the left turns).
 cross_time_s:    3.0        # drive straight across the intersection this long
+cross_trim:     -0.05       # REAL bot only: fixed steer bias held during a straight cross to cancel
+                            # the slight drift (the multiplicative wheel trim is tuned at lane speed
+                            # and leaves a residual veer at the cross speed). + = left, - = right.
+                            # Set -0.05 because it drifted LEFT -> bias right. More drift -> more
+                            # magnitude; flip the sign if it now veers right. (Sim cross ignores this.)
 
 # --- lead steering smoother (FIELD-TUNE, real-only) ---
 # At the real bot's low frame rate the intersection's stop-line + exit markings
