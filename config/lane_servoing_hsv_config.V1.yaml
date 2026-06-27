@@ -6,18 +6,28 @@
 #
 # White tape samples from V1's camera (pink/blue cast — hue runs high, S stays
 # low-to-moderate). White is matched on low-S / high-V; hue is full-range:
-#   H 162 S 52 V 251  (px 605,331)
-#   H 155 S 30 V 228  (px 551,264)
-#   H 134 S 18 V 209  (px 496,197)
-# S tops out at 52 — give the cast headroom above the shared S_max (55) without
-# flooding gray road. V floor kept at the shared 120 so shadowed/distant tape
-# still registers.
+#   H 152 S 20 V 199  (px 556,283)  close
+#   H 100 S 19 V 192  (px 475,198)  far
+#   H 150 S 16 V 197  (px 547,293)  between
+# These all fall INSIDE the band below (S<=60, V>=120), so the HSV was never the
+# problem — the white was being matched then DISCARDED by the detector's side
+# filter. Every white px above sits at x=475..556 in the 640-wide frame, i.e. the
+# RIGHT half; the detector defaulted to keeping LEFT-side white only. Hence
+# white_edge_side below.
 white_lower_h: 0
 white_lower_s: 0
 white_lower_v: 120
 white_upper_h: 179
 white_upper_s: 60
 white_upper_v: 255
+
+# V1's white lane edge is on the RIGHT of the frame (samples at x~475..556 of
+# 640). The detector keeps white blobs on this side and drops the rest (opposite
+# lane edge / road glare). x_frac 0.45 keeps anything right of x~288 — clear of
+# V1's yellow centerline (sampled at x<=205) with margin for the edge swinging
+# inward on curves.
+white_edge_side: right
+white_edge_x_frac: 0.45
 
 # Yellow line samples from V1's camera (orange-leaning, hue ~12-16):
 #   H 12 S 139 V 226  (px 40,273)

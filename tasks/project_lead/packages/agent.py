@@ -4,7 +4,7 @@ import time
 
 import yaml
 
-from tasks.project.packages.control import apply_leds, motors_from_decision
+from tasks.project.packages.control import apply_deadzone, apply_leds, motors_from_decision
 from tasks.project_lead.packages.fsm import (
     STATE_CROSS, STATE_TURN_L, STATE_TURN_R, LeadFSM,
 )
@@ -55,6 +55,11 @@ def main(camera, wheels, leds, stop_event,
             print(f"[lead] auto navigation unavailable ({e!r}) — using the fixed route")
     fsm = LeadFSM(cfg, navigator=navigator)
     baseline = float(cfg.get("wheel_baseline_m", 0.1))
+    # Real bot only: lift a wheel commanded to move but stuck below the motor
+    # deadzone up to it, so the low-speed CURVE/LANE creep turns the wheels
+    # instead of stalling on the spot. 0 disables (and the sim, which has a
+    # pose, is gated out below regardless).
+    wheel_deadzone = float(cfg.get("wheel_deadzone", 0.0))
     live['fsm'] = fsm
     live['perception'] = perception
 
@@ -172,6 +177,11 @@ def main(camera, wheels, leds, stop_event,
                     last_route_idx = fsm.route_idx
 
                 left, right = motors_from_decision(decision)
+                # Real bot (no sim pose): keep a moving wheel above the motor
+                # deadzone so the slow CURVE/LANE creep doesn't stall on the
+                # spot. A commanded full stop stays at zero.
+                if pose is None:
+                    left, right = apply_deadzone(left, right, wheel_deadzone)
 
                 # Reset odometry at maneuver entry so yaw integrates from zero.
                 is_man = decision.state_name in _MANEUVER_STATES

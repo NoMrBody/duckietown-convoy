@@ -13,6 +13,29 @@ def motors_from_decision(d: Decision) -> Tuple[float, float]:
     return _clip01(left), _clip01(right)
 
 
+def apply_deadzone(left: float, right: float, deadzone: float) -> Tuple[float, float]:
+    """Lift the wheels so the slower (inner) wheel clears the motor breakaway,
+    WITHOUT flattening the steering differential, so the low-speed CURVE/LANE
+    creep both moves AND keeps turning. When the inner wheel sits below the
+    deadzone, both wheels are shifted up by the same deficit — preserving
+    (right - left) — rather than clamping each wheel independently (which would
+    pull the inner wheel up to the outer and kill the turn, so the bot runs
+    straight off a curve). A commanded full stop (both <= 0) stays stopped.
+    Real bot only: the caller gates on the absence of a sim pose, since the
+    simulator's ideal motors have no deadzone. deadzone <= 0 is a no-op."""
+    if deadzone <= 0.0:
+        return left, right
+    lo = min(left, right)
+    hi = max(left, right)
+    if hi <= 0.0:
+        return left, right          # commanded stop: leave it stopped
+    if lo < deadzone:               # inner wheel can't break away: lift both
+        bump = deadzone - lo        # by the deficit so the differential survives
+        left += bump
+        right += bump
+    return _clip01(left), _clip01(right)
+
+
 def apply_leds(leds, d: Decision) -> None:
     if leds is None:
         return

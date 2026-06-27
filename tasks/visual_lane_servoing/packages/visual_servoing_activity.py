@@ -17,6 +17,16 @@ _yellow_upper = np.array([_h.get('yellow_upper_h', 0),  _h.get('yellow_upper_s',
 _white_lower = np.array([_h.get('white_lower_h', 0),   _h.get('white_lower_s', 0), _h.get('white_lower_v', 0)])
 _white_upper = np.array([_h.get('white_upper_h', 0), _h.get('white_upper_s', 0), _h.get('white_upper_v', 0)])
 
+# Which side of the frame the bot's white lane edge sits on, and the x-fraction
+# split. detect_lane_markings drops white blobs on the WRONG side (road glare /
+# the opposite lane's edge vs the real one). Historically hardcoded 'left'/0.55,
+# but the side depends on which lane the bot drives: e.g. V1's camera shows white
+# on the RIGHT, where the old 'left' filter discarded it entirely (empty mask
+# however well the HSV matched). Per-bot via the merged HSV config; default
+# 'left'/0.55 keeps the previous behaviour for the sim and unconfigured bots.
+_WHITE_EDGE_SIDE = str(_h.get('white_edge_side', 'left')).lower()
+_WHITE_EDGE_X_FRAC = float(_h.get('white_edge_x_frac', 0.55))
+
 _SIGMA = 4.5
 _YELLOW_MAG_THRESHOLD = 30.0   # dashes are small; softer than the white gate
 _WHITE_MAG_THRESHOLD = 28.0
@@ -121,7 +131,7 @@ def detect_lane_markings(image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         white_mask, cv2.MORPH_CLOSE,
         cv2.getStructuringElement(cv2.MORPH_RECT, (5, 15)))
     white_mask = _drop_small_blobs(white_mask, min_area=35)
-    white_mask = _keep_blobs_on_side(white_mask, 'left', 0.55)
+    white_mask = _keep_blobs_on_side(white_mask, _WHITE_EDGE_SIDE, _WHITE_EDGE_X_FRAC)
 
     full_yellow = np.zeros((h, w), dtype=np.uint8)
     full_white  = np.zeros((h, w), dtype=np.uint8)

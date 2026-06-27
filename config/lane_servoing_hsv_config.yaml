@@ -8,8 +8,16 @@ white_lower_h: 0
 white_lower_s: 0
 white_lower_v: 120
 white_upper_h: 179
-white_upper_s: 55
+white_upper_s: 60
 white_upper_v: 255
+
+# V1's white lane edge is on the RIGHT of the frame (samples at x~475..556 of
+# 640). The detector keeps white blobs on this side and drops the rest (opposite
+# lane edge / road glare). x_frac 0.45 keeps anything right of x~288 — clear of
+# V1's yellow centerline (sampled at x<=205) with margin for the edge swinging
+# inward on curves.
+white_edge_side: right
+white_edge_x_frac: 0.45
 # Yellow: widen hue for camera tint; low S/V floors for dim dashes on dark road.
 # Pale-dash band is OR-ed in the detector (see _PALE_YELLOW_*).
 yellow_lower_h: 8

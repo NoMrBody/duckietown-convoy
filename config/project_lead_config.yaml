@@ -5,8 +5,22 @@
 # ============================================================================
 
 # --- speeds ---
-cruise_speed: 0.30
+# cruise_speed is the TOP speed; every driving state is cruise * a factor < 1
+# (curve_speed_factor, steer_floor_factor, slow_factor, slow_after_factor). If
+# those products fall below the motor breakaway the bot won't move, so cruise is
+# set high enough that even the lowest factor (~0.5) clears it. Raised 0.30->0.40.
+cruise_speed: 0.40
 slow_factor:  0.50          # SLOW_ZONE speed = cruise * slow_factor
+
+# --- motor deadzone (REAL bot only; sim has a pose and is gated out) ---
+# The slow CURVE creep (cruise * curve_speed_factor ~= 0.18) lands at/below the
+# DB21 motor breakaway, so the bot stalls ON THE SPOT in CURVE without ever
+# tripping LANE_LOST. Lift any wheel commanded to MOVE but below this up to it
+# (a commanded full stop stays 0). The lift preserves the steering differential
+# (lifts BOTH wheels), so a slow curve still turns. Field-tune to just above the
+# wheel value at which the bot stalls: observed stalling at 0.22 (turns work with
+# the inner wheel ~0.28), so set 0.28. Raise if it still stalls in CURVE. 0 disables.
+wheel_deadzone: 0.28
 
 # --- sign timing (seconds) ---
 stop_duration: 2.0          # halt this long at a STOP sign / intersection
@@ -44,12 +58,19 @@ turn_radius_right_m: 0.17   # target arc radius for right turns (inner lane arc 
 # full cruise the same steer differential gives proportionally less curvature
 # and the bot runs wide into the opposing lane on 90-deg curves. Slow down
 # when a curve is detected (or steering demand is high).
-curve_speed_factor: 0.6      # CURVE-state speed = cruise * this
+curve_speed_factor: 0.55     # CURVE-state speed = cruise * this. Pulled back 0.8->0.55
+                             # (~0.22): at cruise 0.40 the 0.8 curve speed (~0.32) ran
+                             # WIDE and crossed the yellow -- higher speed = less curvature
+                             # per unit steer. The differential-preserving deadzone lift
+                             # keeps this slower curve from stalling. Lower for tighter/
+                             # slower curves, raise toward cruise for faster/wider ones.
 curve_hold_s:       0.4      # hold CURVE this long after the last detection (no flapping)
 steer_slowdown:     2.5      # speed scales by (1 - this * |steer|): more steering
                              # demand = sharper geometry = slower (continuous,
                              # replaces the old hard threshold)
-steer_floor_factor: 0.5      # never slow below this fraction of the base speed
+steer_floor_factor: 0.7      # never slow below this fraction of the base speed
+                             # (raised 0.5->0.7: hard-steer states must still clear
+                             # the motor breakaway -- cruise 0.40 * 0.7 = 0.28)
 
 # --- maneuver shape / timing (FIELD-TUNE) ---
 turn_base_speed:    0.38    # forward speed during a turn arc (raised 0.30->0.38: lifts the
@@ -75,7 +96,8 @@ min_cross_s:        0.9
 max_cross_s:        2.5
 turn_yaw_target_rad: 1.40   # ~80 deg; encoder-yaw early exit (used only if encoders present)
 slow_after_turn_s:  2.0     # slow window after a maneuver so the follower reacquires
-slow_after_factor:  0.6     # speed during that window = cruise * this
+slow_after_factor:  0.7     # speed during that window = cruise * this (0.6->0.7
+                            # so the post-turn creep also clears the breakaway)
 wheel_baseline_m:   0.10    # wheel-to-wheel distance for encoder yaw estimate
 
 # --- real-robot maneuver timing (FIELD-TUNE) ---
@@ -88,14 +110,14 @@ wheel_baseline_m:   0.10    # wheel-to-wheel distance for encoder yaw estimate
 # odometry and keeps its tuned closed loop). Tune the two durations on the floor:
 # turn_time_s until a ~90 deg turn completes, cross_time_s until it clears the box.
 maneuver_timed:  true
-turn_time_s:     2.375      # hold the turn arc this long. 5.0->2.5->2.375 (-5%): the turn was running
+turn_time_s:     2.1375     # hold the turn arc this long. 5.0->2.5->2.375->2.1375 (-10%): the turn was running
                             # ~twice as long as it should (over-sweeping). This ONLY changes the
                             # duration/angle, NOT the radius -- the wide arc (left_widen 0.40 +
                             # left_base_factor 1.8) is untouched, so the turn stays wide but ends
                             # sooner. Nudge UP if it now stops short of 90 deg (under-rotates), DOWN
                             # if it still over-rotates. NOTE: shared by left AND right turns (the
                             # current route has no rights, so this only affects the left turns).
-cross_time_s:    3.0        # drive straight across the intersection this long
+cross_time_s:    4.0        # drive straight across the intersection this long
 cross_trim:     -0.05       # REAL bot only: fixed steer bias held during a straight cross to cancel
                             # the slight drift (the multiplicative wheel trim is tuned at lane speed
                             # and leaves a residual veer at the cross speed). + = left, - = right.

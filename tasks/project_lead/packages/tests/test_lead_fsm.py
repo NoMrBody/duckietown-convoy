@@ -12,7 +12,7 @@ from tasks.project_lead.packages.fsm import (  # noqa: E402
     LeadFSM, STATE_LANE, STATE_STOP, STATE_TURN_R, STATE_TURN_L, STATE_SLOW_AFTER,
     STATE_DONE, STATE_SLOW, STATE_CROSS, STATE_LOST,
 )
-from tasks.project.packages.control import motors_from_decision  # noqa: E402
+from tasks.project.packages.control import apply_deadzone, motors_from_decision  # noqa: E402
 from tasks.project.packages.world_model import LaneObs, RedLineObs, SignObs, WorldModel  # noqa: E402
 
 
@@ -493,6 +493,37 @@ def test_first_frame_no_transient():
     d = fsm.step(_wm(0.0, steer=0.20), odo_source="encoders")
     assert d.state_name == STATE_LANE
     assert abs(d.steering) < 1e-9
+
+
+def test_deadzone_lift_preserves_turn_on_a_curve():
+    # Inner wheel below breakaway: lift BOTH by the deficit so the inner wheel
+    # moves and the steering differential survives (does NOT flatten to a near-
+    # straight, which would run the bot off the curve).
+    left, right = apply_deadzone(0.08, 0.28, 0.22)
+    assert abs(left - 0.22) < 1e-9 and abs(right - 0.42) < 1e-9
+    assert abs((right - left) - 0.20) < 1e-9   # original differential preserved
+
+
+def test_deadzone_leaves_full_stop_at_zero():
+    # A commanded halt must stay halted — never creep.
+    assert apply_deadzone(0.0, 0.0, 0.22) == (0.0, 0.0)
+
+
+def test_deadzone_both_above_breakaway_untouched():
+    # Both wheels already clear the breakaway: no change.
+    assert apply_deadzone(0.30, 0.50, 0.22) == (0.30, 0.50)
+
+
+def test_deadzone_straight_creep_both_lifted():
+    # Near-straight slow creep: both below breakaway, both lifted, tiny
+    # differential kept.
+    left, right = apply_deadzone(0.15, 0.18, 0.22)
+    assert abs(left - 0.22) < 1e-9 and abs(right - 0.25) < 1e-9
+
+
+def test_deadzone_zero_is_identity():
+    # 0 (and the default / sim path) disables the lift entirely.
+    assert apply_deadzone(0.1, 0.0, 0.0) == (0.1, 0.0)
 
 
 def _run():
