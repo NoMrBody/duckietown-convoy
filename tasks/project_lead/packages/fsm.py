@@ -110,6 +110,11 @@ class LeadFSM:
         # Brief hold so the CURVE state doesn't flap when the detector
         # flickers frame to frame.
         self.curve_hold_s = float(cfg.get("curve_hold_s", 0.4))
+        # When False, drop the dedicated CURVE state entirely: detected curves
+        # fall through to plain LANE_FOLLOW (which still slows with steering
+        # demand via _steer_factor, but applies no curve_speed_factor cap).
+        # Intersection maneuvers (turn/cross) are unaffected either way.
+        self.use_curve_state = bool(cfg.get("use_curve_state", True))
 
         # Halt when the lane has been unhealthy this long while cruising:
         # without it the bot keeps driving blind at cruise speed straight off
@@ -222,11 +227,12 @@ class LeadFSM:
         #    and through it as a dedicated state. Held briefly so a
         #    flickering detection doesn't flap the state.
         steer = wm.lane.steering_suggestion
-        if wm.lane.is_curve:
-            self._curve_until = t + self.curve_hold_s
-        if t < self._curve_until:
-            factor = min(self.curve_speed_factor, self._steer_factor(steer))
-            return self._decide(STATE_CURVE, self.cruise_speed * factor, steer, YELLOW)
+        if self.use_curve_state:
+            if wm.lane.is_curve:
+                self._curve_until = t + self.curve_hold_s
+            if t < self._curve_until:
+                factor = min(self.curve_speed_factor, self._steer_factor(steer))
+                return self._decide(STATE_CURVE, self.cruise_speed * factor, steer, YELLOW)
 
         # 8) default: lane following; speed still scales with steering demand
         #    (reacquire wobbles and the like).

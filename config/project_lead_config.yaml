@@ -33,7 +33,14 @@ route: [straight, straight, straight, left, right]
 turn_radius_left_m:  0.35   # target arc radius for left turns (outer lane arc ~0.43 m)
 turn_radius_right_m: 0.17   # target arc radius for right turns (inner lane arc ~0.17 m)
 
-# --- curve slowdown ---
+# --- curve handling ---
+# false: no dedicated CURVE state — curves are driven by the plain lane
+# follower (still slowed by steering demand, but no curve_speed_factor cap).
+# Intersection maneuvers (turn left / cross straight / turn right) are
+# unaffected.
+use_curve_state: false
+
+# --- curve slowdown (only used when use_curve_state: true) ---
 # The lane PD's steering was tuned around the lane agent's own base speed; at
 # full cruise the same steer differential gives proportionally less curvature
 # and the bot runs wide into the opposing lane on 90-deg curves. Slow down
